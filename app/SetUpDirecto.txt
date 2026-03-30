@@ -1,0 +1,6 @@
+1 - Arrancamos Redis usando docker:  docker run -p 6379:6379 redis
+2 - Limpiamos la caché de redis: docker exec -it 6a901ed44014180f46c6ad7b5a641e14a697805e1765bf194402e843475ea926 redis-cli
+127.0.0.1:6379> flushall
+exit
+3 - Launcheamos la API: uvicorn app.main:app --reload
+4 - Ejecutamos el test en "test_concurrent.py"
