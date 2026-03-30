@@ -3,4 +3,5 @@
 127.0.0.1:6379> flushall
 exit
 3 - Launcheamos la API: uvicorn app.main:app --reload
+3.1 - Si queremos el que es numbered entonces launcheamos la API con:  uvicorn app.main_numbered:app --reload
 4 - Ejecutamos el test en "test_concurrent.py"
