@@ -20,8 +20,11 @@ def parse_line(line):
 
 
 def send(req):
-    r = session.post(URL, json=req)
-    return r.json()
+    try:
+        r = session.post(URL, json=req, timeout=3)
+        return r.json()
+    except:
+        return {"status": "FAIL"}
 
 
 def run_benchmark(file_path):
@@ -38,8 +41,8 @@ def run_benchmark(file_path):
 
     end = time.time()
 
-    success = sum(1 for r in results if r["status"] == "SUCCESS")
-    fail = sum(1 for r in results if r["status"] == "FAIL")
+    success = sum(1 for r in results if r.get("status") == "SUCCESS")
+    fail = sum(1 for r in results if r.get("status") == "FAIL")
 
     total_time = end - start
     throughput = len(results) / total_time
@@ -53,4 +56,4 @@ def run_benchmark(file_path):
 
 
 if __name__ == "__main__":
-    run_benchmark("benchmark_numbered_60000.txt")
+    run_benchmark("testing/benchmark_numbered_60000.txt")
