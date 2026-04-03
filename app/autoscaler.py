@@ -9,7 +9,7 @@ BASE_PORT = 8001
 
 # Variables donde definimos la carga por cada worker
 MIN_WORKERS = 1
-MAX_WORKERS = 5
+MAX_WORKERS = 15
 TARGET_RPS_PER_WORKER = 50
 CHECK_INTERVAL = 1
 
@@ -22,9 +22,18 @@ def start_worker(i):
     port = BASE_PORT + i                                                      # Launcheamos worker por BASE + id
     env = os.environ.copy()
     env["WORKER_ID"] = f"worker{i}"                                           # Creamos el id del worker
-    p = subprocess.Popen(                                                     # Lanzamos el worker
-        ["uvicorn", "app.main:app", "--port", str(port)],
-        env=env
+    log_file = open(f"logging/worker_{i}.log", "w")
+
+    p = subprocess.Popen(
+        [
+            "uvicorn",
+            "app.main:app",
+            "--port", str(port),
+            "--log-level", "warning"
+        ],
+        env=env,
+        stdout=log_file,
+        stderr=log_file
     )
     workers[i] = {"proc": p, "port": port}                                    # Lo ponemos en la lista d workers para poder controlarlo
     print(f"Started worker {i} on port {port}")

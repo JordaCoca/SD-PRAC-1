@@ -12,6 +12,11 @@ session = requests.Session()
 
 def parse_line(line):
     parts = line.strip().split()
+
+    # Ignorar los comentarios
+    if not parts or parts[0] != "BUY":
+        return None
+
     return {
         "client_id": parts[1],
         "seat_id": int(parts[2]),
@@ -32,7 +37,10 @@ def run_benchmark(file_path):
     requests.post(RESET_URL)
 
     with open(file_path, "r") as f:
-        requests_list = [parse_line(line) for line in f]
+        requests_list = [
+            req for line in f
+            if (req := parse_line(line)) is not None
+        ]
 
     start = time.time()
 
