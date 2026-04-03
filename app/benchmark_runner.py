@@ -64,4 +64,4 @@ def run_benchmark(file_path):
 
 
 if __name__ == "__main__":
-    run_benchmark("testing/benchmark_numbered_60000.txt")
+    run_benchmark("testing/benchmark_numbered_2000.txt")
