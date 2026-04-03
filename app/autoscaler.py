@@ -9,8 +9,8 @@ BASE_PORT = 8001
 
 # Variables donde definimos la carga por cada worker
 MIN_WORKERS = 1
-MAX_WORKERS = 8
-TARGET_RPS_PER_WORKER = 250
+MAX_WORKERS = 40
+TARGET_RPS_PER_WORKER = 145
 CHECK_INTERVAL = 1
 
 # Load Balancer endpoint
