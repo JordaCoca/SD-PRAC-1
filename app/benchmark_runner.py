@@ -13,15 +13,28 @@ session = requests.Session()
 def parse_line(line):
     parts = line.strip().split()
 
-    # Ignorar los comentarios
+    # Ignorar comentarios o líneas vacías
     if not parts or parts[0] != "BUY":
         return None
 
-    return {
-        "client_id": parts[1],
-        "seat_id": int(parts[2]),
-        "request_id": parts[3]
-    }
+    # BUY c0 123 r0  (numbered)
+    if len(parts) == 4:
+        return {
+            "client_id": parts[1],
+            "seat_id": int(parts[2]),
+            "request_id": parts[3]
+        }
+
+    # BUY c0 r0  (unnumbered)
+    elif len(parts) == 3:
+        return {
+            "client_id": parts[1],
+            "seat_id": None,
+            "request_id": parts[2]
+        }
+
+    # formato inválido
+    return None
 
 
 def send(req):
@@ -64,4 +77,5 @@ def run_benchmark(file_path):
 
 
 if __name__ == "__main__":
-    run_benchmark("testing/benchmark_numbered_2000.txt")
+    #run_benchmark("testing/benchmark_numbered_1000.txt")
+    run_benchmark("testing/benchmark_unnumbered_1000.txt")

@@ -3,7 +3,7 @@ docker run -d --name myredis -p 6379:6379 redis
 2️ - Load Balancer (entry point)
 uvicorn app.load_balancer:app --host 127.0.0.1 --port 8080
 3️ - Autoscaler (crea workers dinámicos)
-curl -X POST http://127.0.0.1:8080/reset  ---> Esto para resetear el sistema y metricas
+curl.exe -X POST http://127.0.0.1:8080/reset  ---> Esto para resetear el sistema y metricas
 cd app
 python autoscaler.py
 4️ - Ejecutar benchmark
