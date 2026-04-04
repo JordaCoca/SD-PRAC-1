@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 URL = "http://127.0.0.1:8080/buy"
 RESET_URL = "http://127.0.0.1:8080/reset"
 
-NUM_WORKERS = 30
+NUM_WORKERS = 25
 
 session = requests.Session()
 
