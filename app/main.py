@@ -21,10 +21,7 @@ class BuyRequest(BaseModel):
 
 @app.post("/buy")
 def buy(req: BuyRequest):
-    # 🔥 métrica correcta
     r.incr(f"metrics:{WORKER_ID}:requests_received")
-
-    # 🔥 pequeña latencia para generar backlog (CLAVE para escalar)
     time.sleep(0.005)
 
     # UNNUMBERED
@@ -60,8 +57,15 @@ def buy(req: BuyRequest):
 def reset():
     r.flushall()
     seats = list(range(1, MAX_SEATS + 1))
-    r.sadd("available_seats", *seats)
-    return {"status": "OK"}
+    # Usamos pipelines para que Redis sea mucho más rápido al insertar 20k elementos
+    pipe = r.pipeline()
+    # Dividimos en trozos (chunks) para no bloquear el hilo de Redis
+    for i in range(0, len(seats), 5000):
+        pipe.sadd("available_seats", *seats[i:i + 5000])
+    pipe.execute()
+
+    print(f"System reset: {MAX_SEATS} tickets ready.")
+    return {"status": "OK", "message": "System wiped and tickets reloaded"}
 
 
 @app.get("/metrics")

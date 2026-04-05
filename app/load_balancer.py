@@ -56,15 +56,6 @@ async def proxy_buy(req: Request):
         return {"status": "FAIL", "reason": "worker error"}
 
 
-@app.post("/reset")
-def proxy_reset():
-    for w in workers:
-        try:
-            requests.post(f"{w}/reset", timeout=2)
-        except:
-            pass
-    return {"status": "OK"}
-
 
 @app.get("/metrics")
 def metrics():

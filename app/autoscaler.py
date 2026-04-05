@@ -144,14 +144,16 @@ while True:
     smoothed_rps = ALPHA * rps + (1 - ALPHA) * smoothed_rps
 
     # -------- TARGET --------
-    # Solo considerar scale-up si hay actividad real
     if rps > MIN_RPS_THRESHOLD or pending > 0:
+        # Si hay tráfico, calculamos según la carga
         desired = ceil(smoothed_rps / TARGET_RPS_PER_WORKER)
         desired = max(desired, ceil(pending / TARGET_RPS_PER_WORKER))
-        desired = max(MIN_WORKERS, min(desired, MAX_WORKERS))
     else:
-        # Si no hay actividad, dejamos el desired en el actual
-        desired = len(workers)
+        # Si NO hay tráfico, el deseo es volver al mínimo
+        desired = MIN_WORKERS
+
+    # Asegurar que siempre esté en el rango permitido
+    desired = max(MIN_WORKERS, min(desired, MAX_WORKERS))
 
     current = len(workers)
 
@@ -161,7 +163,9 @@ while True:
         scale_to(new_target)
 
     elif desired < current:
+        # Solo bajamos si ha pasado el tiempo de COOLDOWN
         if time.time() - last_scale_down_time > SCALE_DOWN_COOLDOWN:
+            # Bajamos de golpe o paso a paso según tu SCALE_DOWN_STEP
             new_target = max(current - SCALE_DOWN_STEP, desired)
             scale_to(new_target)
             last_scale_down_time = time.time()

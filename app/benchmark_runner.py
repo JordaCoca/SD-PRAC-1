@@ -77,5 +77,5 @@ def run_benchmark(file_path):
 
 
 if __name__ == "__main__":
-    #run_benchmark("testing/benchmark_numbered_1000.txt")
-    run_benchmark("testing/benchmark_numbered_stress_2100_210.txt")
+    run_benchmark("testing/benchmark_unnumbered_2100.txt")
+    #run_benchmark("testing/benchmark_numbered_stress_2100_210.txt")
