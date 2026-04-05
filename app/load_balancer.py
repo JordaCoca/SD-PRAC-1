@@ -1,12 +1,13 @@
 from fastapi import FastAPI, Request
 import requests
 import itertools
+import httpx
 
 app = FastAPI()
 
 workers = []
 worker_cycle = None
-
+client = httpx.AsyncClient()
 
 def update_cycle():
     global worker_cycle
@@ -48,9 +49,10 @@ async def proxy_buy(req: Request):
     worker = next(worker_cycle)
 
     try:
-        r = requests.post(f"{worker}/buy", json=data, timeout=2)
+        # Petición asíncrona que NO bloquea el Load Balancer
+        r = await client.post(f"{worker}/buy", json=data, timeout=2.0)
         return r.json()
-    except:
+    except Exception:
         return {"status": "FAIL", "reason": "worker error"}
 
 

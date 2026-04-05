@@ -1,6 +1,8 @@
 import subprocess
 import time
 import os
+
+import redis
 import requests
 from math import ceil
 
@@ -10,7 +12,7 @@ BASE_PORT = 8001
 MIN_WORKERS = 1
 MAX_WORKERS = 40
 
-TARGET_RPS_PER_WORKER = 25
+TARGET_RPS_PER_WORKER = 35
 CHECK_INTERVAL = 0.5
 
 # Control fino
@@ -84,18 +86,27 @@ def scale_to(n):
 
 
 # ---------------- METRICS ----------------
+r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 def get_metrics():
     try:
-        r = requests.get(f"{LB_URL}/metrics", timeout=0.5)
-        data = r.json()
+        # Consultar Redis directamente es instantáneo y no bloquea el LB
+        keys = r.keys("metrics:*")
+        total_received = 0
+        total_processed = 0
 
-        total_received = sum(v for k, v in data.items() if "requests_received" in k)
-        total_processed = sum(v for k, v in data.items() if "requests_processed" in k)
+        for k in keys:
+            val = int(r.get(k) or 0)
+            if "requests_received" in k:
+                total_received += val
+            elif "requests_processed" in k:
+                total_processed += val
 
         pending = max(0, total_received - total_processed)
         return total_received, pending
-    except:
-        return 0, 0
+    except Exception as e:
+        print(f"Error fetching metrics from Redis: {e}")
+        # Retornar None en vez de 0 para no corromper el cálculo de RPS
+        return None, None
 
 # ---------------- INIT ----------------
 
@@ -106,21 +117,26 @@ prev_time = time.time()
 
 # ---------------- LOOP ----------------
 
+MIN_RPS_THRESHOLD = 5  # no escalar si raw RPS y pending son muy bajos
+
+# -------- LOOP --------
 while True:
     time.sleep(CHECK_INTERVAL)
 
-    total_received, pending = get_metrics()
+    metrics = get_metrics()
+    if metrics[0] is None:
+        continue  # Si falla, nos saltamos esta iteración, no reseteamos prev_total
+
+    total_received, pending = metrics
     now = time.time()
 
     delta = total_received - prev_total
     dt = now - prev_time
 
-    # Protección
     if delta < 0:
         delta = 0
 
     rps = delta / dt if dt > 0 else 0
-
     prev_total = total_received
     prev_time = now
 
@@ -128,21 +144,23 @@ while True:
     smoothed_rps = ALPHA * rps + (1 - ALPHA) * smoothed_rps
 
     # -------- TARGET --------
-    desired = ceil(smoothed_rps / TARGET_RPS_PER_WORKER)
-    desired = max(desired, ceil(pending / TARGET_RPS_PER_WORKER))
-
-    desired = max(MIN_WORKERS, min(desired, MAX_WORKERS))
+    # Solo considerar scale-up si hay actividad real
+    if rps > MIN_RPS_THRESHOLD or pending > 0:
+        desired = ceil(smoothed_rps / TARGET_RPS_PER_WORKER)
+        desired = max(desired, ceil(pending / TARGET_RPS_PER_WORKER))
+        desired = max(MIN_WORKERS, min(desired, MAX_WORKERS))
+    else:
+        # Si no hay actividad, dejamos el desired en el actual
+        desired = len(workers)
 
     current = len(workers)
 
     # -------- HYSTERESIS --------
     if desired > current:
-        # SCALE UP rápido
         new_target = min(current + SCALE_UP_STEP, desired)
         scale_to(new_target)
 
     elif desired < current:
-        # SCALE DOWN lento con cooldown
         if time.time() - last_scale_down_time > SCALE_DOWN_COOLDOWN:
             new_target = max(current - SCALE_DOWN_STEP, desired)
             scale_to(new_target)
