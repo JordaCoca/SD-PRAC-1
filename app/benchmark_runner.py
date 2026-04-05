@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 URL = "http://127.0.0.1:8080/buy"
 RESET_URL = "http://127.0.0.1:8080/reset"
 
-NUM_WORKERS = 25
+NUM_WORKERS = 3
 
 session = requests.Session()
 
@@ -78,4 +78,4 @@ def run_benchmark(file_path):
 
 if __name__ == "__main__":
     #run_benchmark("testing/benchmark_numbered_1000.txt")
-    run_benchmark("testing/benchmark_unnumbered_2100.txt")
+    run_benchmark("testing/benchmark_numbered_stress_2100_210.txt")

@@ -10,12 +10,12 @@ BASE_PORT = 8001
 MIN_WORKERS = 1
 MAX_WORKERS = 40
 
-TARGET_RPS_PER_WORKER = 90
+TARGET_RPS_PER_WORKER = 25
 CHECK_INTERVAL = 0.5
 
 # Control fino
-SCALE_UP_STEP = 6
-SCALE_DOWN_STEP = 2
+SCALE_UP_STEP = 2
+SCALE_DOWN_STEP = 4
 
 SCALE_DOWN_COOLDOWN = 3  # segundos sin presión antes de bajar
 
@@ -84,21 +84,18 @@ def scale_to(n):
 
 
 # ---------------- METRICS ----------------
-
 def get_metrics():
     try:
         r = requests.get(f"{LB_URL}/metrics", timeout=0.5)
         data = r.json()
 
-        total_received = data.get("metrics:global:requests_received", 0)
-        total_processed = data.get("metrics:global:requests_processed", 0)
+        total_received = sum(v for k, v in data.items() if "requests_received" in k)
+        total_processed = sum(v for k, v in data.items() if "requests_processed" in k)
 
         pending = max(0, total_received - total_processed)
-
         return total_received, pending
     except:
         return 0, 0
-
 
 # ---------------- INIT ----------------
 
