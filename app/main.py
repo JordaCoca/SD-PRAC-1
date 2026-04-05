@@ -2,38 +2,44 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 import redis
 import os
+import time
 from typing import Optional
 
 app = FastAPI()
 
 r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 
-MAX_SEATS = 20000
+MAX_SEATS = 2000
 WORKER_ID = os.getenv("WORKER_ID", "worker-unknown")
 
 
 class BuyRequest(BaseModel):
     client_id: str
-    seat_id: Optional[int]          # Permitir unnumbered
+    seat_id: Optional[int]
     request_id: str
 
 
 @app.post("/buy")
 def buy(req: BuyRequest):
-    r.incr(f"metrics:{WORKER_ID}:requests")
+    # 🔥 métrica correcta
+    r.incr(f"metrics:{WORKER_ID}:requests_received")
+
+    # 🔥 pequeña latencia para generar backlog (CLAVE para escalar)
+    time.sleep(0.005)
+
     # UNNUMBERED
     if req.seat_id is None:
-        seat = r.spop("available_seats")  # atomic
+        seat = r.spop("available_seats")
 
         if seat is None:
             r.incr(f"metrics:{WORKER_ID}:requests_processed")
             return {"status": "FAIL", "reason": "sold out"}
 
-        key = f"seat:{seat}"
-        r.set(key, req.client_id)
+        r.set(f"seat:{seat}", req.client_id)
 
         r.incr(f"metrics:{WORKER_ID}:requests_processed")
         return {"status": "SUCCESS", "seat_id": int(seat)}
+
     # NUMBERED
     if req.seat_id < 1 or req.seat_id > MAX_SEATS:
         r.incr(f"metrics:{WORKER_ID}:requests_processed")
@@ -41,9 +47,7 @@ def buy(req: BuyRequest):
 
     key = f"seat:{req.seat_id}"
 
-    # intentar reservar ese asiento concreto
     if r.setnx(key, req.client_id):
-        # quitarlo del pool si estaba disponible
         r.srem("available_seats", req.seat_id)
         r.incr(f"metrics:{WORKER_ID}:requests_processed")
         return {"status": "SUCCESS", "seat_id": req.seat_id}
@@ -64,14 +68,7 @@ def reset():
 def metrics():
     result = {}
 
-    # Requests recibidas
-    keys_received = r.keys("metrics:*:requests_received")
-    for k in keys_received:
-        result[k] = int(r.get(k))
-
-    # Requests procesadas
-    keys_processed = r.keys("metrics:*:requests_processed")
-    for k in keys_processed:
+    for k in r.keys("metrics:*"):
         result[k] = int(r.get(k))
 
     return result

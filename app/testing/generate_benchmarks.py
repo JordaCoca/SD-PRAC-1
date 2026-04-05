@@ -17,5 +17,5 @@ def generate_numbered(n):
     print("Numbered benchmark guardado en", filename)
 
 if __name__ == "__main__":
-    generate_unnumbered(19000)
-    #generate_numbered(1000)
+    #generate_unnumbered(2100)
+    generate_numbered(2100)

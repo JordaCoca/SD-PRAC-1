@@ -7,24 +7,35 @@ from math import ceil
 workers = {}
 BASE_PORT = 8001
 
-# Variables de autoescalado
 MIN_WORKERS = 1
 MAX_WORKERS = 40
-TARGET_RPS_PER_WORKER = 25
+
+TARGET_RPS_PER_WORKER = 90
 CHECK_INTERVAL = 0.5
 
-# Endpoint del Load Balancer
+# Control fino
+SCALE_UP_STEP = 6
+SCALE_DOWN_STEP = 2
+
+SCALE_DOWN_COOLDOWN = 3  # segundos sin presión antes de bajar
+
+ALPHA = 0.3  # smoothing EMA
+
 LB_URL = "http://127.0.0.1:8080"
 
+last_scale_down_time = time.time()
+smoothed_rps = 0
 
-# --- Funciones para arrancar/parar workers ---
+
+# ---------------- WORKERS ----------------
+
 def start_worker(i):
     port = BASE_PORT + i
     env = os.environ.copy()
-    worker_id = f"worker{i}"
-    env["WORKER_ID"] = worker_id
+    env["WORKER_ID"] = f"worker{i}"
 
     log_file = open(f"logging/worker_{i}.log", "w")
+
     p = subprocess.Popen(
         ["uvicorn", "app.main:app", "--port", str(port), "--log-level", "warning"],
         env=env,
@@ -32,101 +43,112 @@ def start_worker(i):
         stderr=log_file
     )
 
-    workers[i] = {"proc": p, "port": port, "id": worker_id}
-    print(f"Started worker {i} on port {port}")
+    workers[i] = {"proc": p, "port": port}
 
-    time.sleep(0.5)
+    print(f"Started worker {i}")
+    time.sleep(0.3)
 
-    # Registrar en Load Balancer
     try:
         requests.post(f"{LB_URL}/register", json={"port": port})
     except:
-        print("Warning: could not register worker in LB")
+        pass
 
 
 def stop_worker(i):
-    if i in workers:
-        port = workers[i]["port"]
-        worker_id = workers[i]["id"]
+    if i not in workers:
+        return
 
-        # Esperar a que termine de procesar requests pendientes (timeout 5s)
-        start = time.time()
-        while True:
-            try:
-                r = requests.get(f"http://127.0.0.1:{port}/metrics").json()
-                recvd = r.get(f"metrics:{worker_id}:requests_received", 0)
-                done = r.get(f"metrics:{worker_id}:requests_processed", 0)
-                if done >= recvd or time.time() - start > 5:
-                    break
-                time.sleep(0.1)
-            except:
-                break
+    port = workers[i]["port"]
 
-        workers[i]["proc"].terminate()
-        print(f"Stopped worker {i}")
+    workers[i]["proc"].terminate()
+    print(f"Stopped worker {i}")
 
-        try:
-            requests.post(f"{LB_URL}/unregister", json={"port": port})
-        except:
-            print("Warning: could not unregister worker from LB")
+    try:
+        requests.post(f"{LB_URL}/unregister", json={"port": port})
+    except:
+        pass
 
-        del workers[i]
+    del workers[i]
 
 
-# --- Escalar al número de workers deseado ---
 def scale_to(n):
     current = len(workers)
+
     if n > current:
         for i in range(current, n):
             start_worker(i)
+
     elif n < current:
-        for i in list(workers.keys())[n:]:
+        for i in sorted(workers.keys(), reverse=True)[:current - n]:
             stop_worker(i)
 
 
-# --- Calcular RPS y pendientes ---
-def get_rps_and_pending():
-    total_received = 0
-    total_processed = 0
-    for w in workers.values():
-        try:
-            r = requests.get(f"http://127.0.0.1:{w['port']}/metrics").json()
-            worker_id = w["id"]
-            received = r.get(f"metrics:{worker_id}:requests_received", 0)
-            processed = r.get(f"metrics:{worker_id}:requests_processed", 0)
-            total_received += received
-            total_processed += processed
-        except:
-            pass
-    pending = total_received - total_processed
-    return total_received, pending
+# ---------------- METRICS ----------------
+
+def get_metrics():
+    try:
+        r = requests.get(f"{LB_URL}/metrics", timeout=0.5)
+        data = r.json()
+
+        total_received = data.get("metrics:global:requests_received", 0)
+        total_processed = data.get("metrics:global:requests_processed", 0)
+
+        pending = max(0, total_received - total_processed)
+
+        return total_received, pending
+    except:
+        return 0, 0
 
 
-# --- Inicializar con mínimo ---
+# ---------------- INIT ----------------
+
 scale_to(MIN_WORKERS)
 
-# --- Loop de autoescalado ---
 prev_total = 0
 prev_time = time.time()
 
+# ---------------- LOOP ----------------
+
 while True:
     time.sleep(CHECK_INTERVAL)
-    total_received, pending = get_rps_and_pending()
+
+    total_received, pending = get_metrics()
     now = time.time()
 
-    rps = (total_received - prev_total) / (now - prev_time)
+    delta = total_received - prev_total
+    dt = now - prev_time
+
+    # Protección
+    if delta < 0:
+        delta = 0
+
+    rps = delta / dt if dt > 0 else 0
+
     prev_total = total_received
     prev_time = now
 
-    # Número de workers necesarios según RPS objetivo
-    desired_workers = ceil(rps / TARGET_RPS_PER_WORKER)
+    # -------- SMOOTHING --------
+    smoothed_rps = ALPHA * rps + (1 - ALPHA) * smoothed_rps
 
-    # Evitar apagar workers que aún tienen requests pendientes
-    min_workers_due_to_pending = ceil(pending / TARGET_RPS_PER_WORKER)
-    desired_workers = max(desired_workers, min_workers_due_to_pending)
+    # -------- TARGET --------
+    desired = ceil(smoothed_rps / TARGET_RPS_PER_WORKER)
+    desired = max(desired, ceil(pending / TARGET_RPS_PER_WORKER))
 
-    # Limitar al rango permitido
-    desired_workers = min(max(desired_workers, MIN_WORKERS), MAX_WORKERS)
+    desired = max(MIN_WORKERS, min(desired, MAX_WORKERS))
 
-    print(f"Current RPS: {rps:.2f}, Pending: {pending}, scaling to {desired_workers} workers")
-    scale_to(desired_workers)
+    current = len(workers)
+
+    # -------- HYSTERESIS --------
+    if desired > current:
+        # SCALE UP rápido
+        new_target = min(current + SCALE_UP_STEP, desired)
+        scale_to(new_target)
+
+    elif desired < current:
+        # SCALE DOWN lento con cooldown
+        if time.time() - last_scale_down_time > SCALE_DOWN_COOLDOWN:
+            new_target = max(current - SCALE_DOWN_STEP, desired)
+            scale_to(new_target)
+            last_scale_down_time = time.time()
+
+    print(f"RPS(raw): {rps:.1f} | RPS(avg): {smoothed_rps:.1f} | Pending: {pending} | Workers: {current} -> {desired}")
