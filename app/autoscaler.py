@@ -39,7 +39,7 @@ def start_worker(i):
     log_file = open(f"logging/worker_{i}.log", "w")
 
     p = subprocess.Popen(
-        ["uvicorn", "app.main:app", "--port", str(port), "--log-level", "warning"],
+        ["uvicorn", "app.main:app", "--port", str(port), "--log-level", "warning", "--timeout-keep-alive", "5"],
         env=env,
         stdout=log_file,
         stderr=log_file
@@ -62,14 +62,28 @@ def stop_worker(i):
 
     port = workers[i]["port"]
 
-    workers[i]["proc"].terminate()
-    print(f"Stopped worker {i}")
-
+    # 1. NOTIFICAR AL LB PRIMERO
     try:
-        requests.post(f"{LB_URL}/unregister", json={"port": port})
+        requests.post(f"{LB_URL}/unregister", json={"port": port}, timeout=1)
+        print(f"Worker {i} sacado de la rotación (Draining...)")
     except:
         pass
 
+    # 2. ESPERA DE CORTESÍA (Draining time)
+    # Damos tiempo a que las peticiones que ya estaban "en vuelo" terminen.
+    # Como tu latencia es de 0.005s, con 0.5s o 1s vas sobradísimo.
+    time.sleep(1.0)
+
+    # 3. AHORA SÍ, MATAR EL PROCESO
+    workers[i]["proc"].terminate()
+
+    # Opcional: esperar a que el proceso muera realmente
+    try:
+        workers[i]["proc"].wait(timeout=2)
+    except:
+        workers[i]["proc"].kill()  # Force kill si se queda colgado
+
+    print(f"Stopped worker {i} limpiamente.")
     del workers[i]
 
 
