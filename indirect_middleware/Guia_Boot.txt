@@ -1,0 +1,28 @@
+0 - OPCIONAL: Instalar dependencias si es necesario
+pip install pika redis fastapi uvicorn
+
+1 - PRIMERO: Poner a rabbitmq runnning
+docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
+
+2 - SEGUNDO: Levantar redis
+docker run -d --name myredis -p 6379:6379 redis
+
+3 - TERCERO: Limpiar colas anteriores:
+rabbitmqctl purge_queue ticket_queue
+
+====================================
+            EJECUCIÓN
+====================================
+
+1 - Terminal 1 (lanzamos loadBalancer): uvicorn app.load_balancer:app --port 8080
+2 - Terminal 2 (lanzamos el autoscaler): python app/autoscaler_mq.py
+3 - Terminal 3 (limpiamos redis): curl.exe -X POST http://127.0.0.1:8080/reset
+4 - Ejecutar el stress_test.py
+
+====================================
+            VERIFICACIÓN
+====================================
+Una vez que la cola esté a cero y el Autoscaler diga Deseados: 1 (después del tiempo de cooldown), consultar las métricas finales:
+curl.exe -X GET http://127.0.0.1:8080/metrics
+
+

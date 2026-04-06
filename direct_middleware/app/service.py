@@ -1,5 +1,5 @@
-from app.redis_client import redis_client
-from app.config import MAX_TICKETS
+from direct_middleware.app.redis_client import redis_client
+from direct_middleware.app.config import MAX_TICKETS
 
 # --- UNNUMBERED ---
 def buy_unnumbered():
