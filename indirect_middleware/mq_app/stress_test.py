@@ -46,5 +46,34 @@ def run_stress_test_unnumbered(total_requests=3000):
     print("-" * 30)
 
 
+def run_numbered_test(total_requests=1000, num_seats=100):
+    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+    channel = connection.channel()
+    channel.queue_declare(queue='ticket_queue', durable=True)
+
+    print(f" Enviando {total_requests} peticiones para {num_seats} asientos distintos...")
+
+    for i in range(total_requests):
+        # El asiento será: 1, 2, 3... 100, 1, 2, 3...
+        seat_id = (i % num_seats) + 1
+
+        message = {
+            "client_id": f"client_{i}",
+            "seat_id": seat_id,  # Enviamos el ID numérico
+            "request_id": f"req_{i}"
+        }
+
+        channel.basic_publish(
+            exchange='',
+            routing_key='ticket_queue',
+            body=json.dumps(message),
+            properties=pika.BasicProperties(delivery_mode=2)
+        )
+
+    connection.close()
+    print(" Inyección completada.")
+
+
 if __name__ == "__main__":
-    run_stress_test_unnumbered(3000)
+    #run_stress_test_unnumbered(3000)
+    run_numbered_test()

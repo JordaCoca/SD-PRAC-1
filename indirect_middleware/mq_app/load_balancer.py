@@ -13,7 +13,7 @@ def reset_total():
     r_db.flushall()
 
     # 2. Inicializar 20,000 asientos
-    MAX_SEATS = 1500    # ATENCIÓN: PONER AL FINAL PARA ENTREGA 2.000
+    MAX_SEATS = 100    # ATENCIÓN: PONER AL FINAL PARA ENTREGA 2.000
     seats = list(range(1, MAX_SEATS + 1))
     pipe = r_db.pipeline()
     for i in range(0, len(seats), 5000):
