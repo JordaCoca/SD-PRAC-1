@@ -18,6 +18,7 @@ rabbitmqctl purge_queue ticket_queue
 2 - Terminal 2 (lanzamos el autoscaler): python app/autoscaler_mq.py
 3 - Terminal 3 (limpiamos redis): curl.exe -X POST http://127.0.0.1:8080/reset
 4 - Ejecutar el stress_test.py
+5 - Una vez terminado consultar las metricas: curl.exe -X GET http://127.0.0.1:8080/metrics
 
 ====================================
             VERIFICACIÓN

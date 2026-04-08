@@ -2,26 +2,49 @@ import pika
 import json
 import time
 
-def send_test_batch(n=2000):
+
+def run_stress_test_unnumbered(total_requests=3000):
+    # Conexión a RabbitMQ
     connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
     channel = connection.channel()
+
+    # Aseguramos que la cola existe
     channel.queue_declare(queue='ticket_queue', durable=True)
 
-    print(f" Enviando {n} peticiones a la cola...")
-    for i in range(n):
+    print(f" Lanzando experimento: {total_requests} peticiones UNNUMBERED...")
+
+    start_time = time.time()
+
+    for i in range(total_requests):
+        # Creamos el mensaje SIN seat_id para forzar lógica Unnumbered
         message = {
-            "client_id": f"user_{i}",
-            "seat_id": i if i % 2 == 0 else None, # Mezcla numeradas y no numeradas
+            "client_id": f"client_{i}",
+            "seat_id": None,
             "request_id": f"req_{i}"
         }
+
         channel.basic_publish(
             exchange='',
             routing_key='ticket_queue',
             body=json.dumps(message),
-            properties=pika.BasicProperties(delivery_mode=2)
+            properties=pika.BasicProperties(
+                delivery_mode=2,  # Mensaje persistente
+            )
         )
+
+        if (i + 1) % 500 == 0:
+            print(f"  > {i + 1} mensajes enviados...")
+
     connection.close()
-    print(" Envío completado.")
+    end_time = time.time()
+
+    duration = end_time - start_time
+    print("-" * 30)
+    print(f" ENVÍO COMPLETADO")
+    print(f" Tiempo de inyección: {duration:.2f} segundos")
+    print(f" Tasa de envío: {total_requests / duration:.2f} msg/s")
+    print("-" * 30)
+
 
 if __name__ == "__main__":
-    send_test_batch(3000) # Enviamos 3000 de golpe
+    run_stress_test_unnumbered(3000)
