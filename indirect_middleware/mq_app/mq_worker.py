@@ -30,10 +30,10 @@ def callback(ch, method, properties, body):
 
     # --- REGISTRO DE RESULTADO ---
     if success:
-        r.incr(f"metrics:{WORKER_ID}:requests_processed")
-        # Aquí podrías enviar una notificación al cliente si fuera necesario
+        r.incr(f"metrics:{WORKER_ID}:success")
     else:
-        r.incr(f"metrics:{WORKER_ID}:requests_processed")
+        r.incr(f"metrics:{WORKER_ID}:fail")
+    r.incr(f"metrics:{WORKER_ID}:requests_processed")
 
     # --- CONFIRMACIÓN (ACK) ---
     # Le dice a Rabbit: "Ya he terminado, puedes borrar el mensaje de la cola"

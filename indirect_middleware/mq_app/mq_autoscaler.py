@@ -64,6 +64,7 @@ def stop_worker(worker_id):
 
 def monitor_and_scale():
     global last_scale_down_time
+    last_scale_down_time = time.time()
 
     # Asegurar el mínimo de workers al arrancar
     for i in range(MIN_WORKERS):

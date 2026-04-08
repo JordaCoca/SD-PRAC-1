@@ -51,3 +51,29 @@ def get_metrics():
         if "success" in key: aggregated["success"] += val
 
     return aggregated
+
+
+@app.get("/metrics")
+def get_global_metrics():
+    # Buscamos todas las llaves de métricas de cualquier worker MQ
+    keys = r_db.keys("metrics:mq-*")
+
+    total_received = 0
+    total_success = 0
+    total_fail = 0
+
+    for key in keys:
+        value = int(r_db.get(key) or 0)
+        if ":requests_received" in key:
+            total_received += value
+        elif ":success" in key:
+            total_success += value
+        elif ":fail" in key:
+            total_fail += value
+
+    return {
+        "total_requests_received": total_received,
+        "total_success": total_success,
+        "total_fail": total_fail,
+        "active_workers": len(set(k.split(":")[1] for k in keys))
+    }
