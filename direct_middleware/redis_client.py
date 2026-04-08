@@ -1,5 +1,5 @@
 import redis
-from direct_middleware.app.config import REDIS_HOST, REDIS_PORT
+from direct_middleware.config import REDIS_HOST, REDIS_PORT
 
 redis_client = redis.Redis(
     host=REDIS_HOST,

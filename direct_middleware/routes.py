@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
-from direct_middleware.app.service import buy_unnumbered, buy_numbered
+from direct_middleware.service import buy_unnumbered, buy_numbered
 
 router = APIRouter()
 

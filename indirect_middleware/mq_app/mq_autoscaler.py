@@ -1,46 +1,59 @@
-import time
+import os
 import subprocess
+import sys
+import time
 import pika
 from math import ceil
 
-# --- CONFIGURACIÓN ---
+# Configuración
 QUEUE_NAME = 'ticket_queue'
 RABBIT_HOST = 'localhost'
-
 MIN_WORKERS = 1
 MAX_WORKERS = 10
-MESSAGES_PER_WORKER = 50  # Queremos 1 worker por cada 500 mensajes en cola
-SCALE_DOWN_COOLDOWN = 5  # Segundos de espera antes de apagar un worker
-CHECK_INTERVAL = 2  # Cada cuánto tiempo mirar la cola
+CHECK_INTERVAL = 0.5
+SCALE_DOWN_COOLDOWN = 1.5
 
-workers = {}  # {id: subprocess_handle}
-last_scale_down_time = time.time()
+MESSAGES_PER_WORKER = 500
+
+workers = {}
 
 
 def get_queue_depth():
-    """Consulta a RabbitMQ cuántos mensajes hay en la cola"""
     try:
         connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBIT_HOST))
         channel = connection.channel()
-        # passive=True sirve para solo consultar el estado sin crear la cola
-        queue = channel.queue_declare(queue=QUEUE_NAME, durable=True, passive=True)
+        # IMPORTANTE: passive=False (por defecto) para que la cree si no existe
+        queue = channel.queue_declare(queue=QUEUE_NAME, durable=True)
         count = queue.method.message_count
         connection.close()
         return count
     except Exception as e:
-        print(f" Error consultando RabbitMQ: {e}")
+        print(f" Esperando a RabbitMQ... {e}")
         return 0
 
 
 def start_worker(worker_id):
     if worker_id not in workers:
         print(f" Escalando: Iniciando Worker MQ {worker_id}")
-        # Pasamos el ID por variable de entorno para que las métricas en Redis sean separadas
-        env = {"WORKER_ID": f"mq-{worker_id}"}
-        # IMPORTANTE: Asegúrate de que el nombre del archivo sea el de tu consumidor MQ
-        proc = subprocess.Popen(["python", "app/worker_mq.py"], env=env)
-        workers[worker_id] = proc
 
+        # 1. Obtenemos la ruta absoluta de la carpeta donde está este script (mq_app)
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        worker_script = os.path.join(base_path, "mq_worker.py")
+
+        # 2. Usamos el ejecutable de Python que está corriendo actualmente
+        # Esto es mucho mejor que poner ".venv/..." a mano
+        python_exe = sys.executable
+
+        # 3. Copiamos el entorno (Vital para el WinError 10106)
+        env = os.environ.copy()
+        env["WORKER_ID"] = f"mq-{worker_id}"
+
+        # 4. Lanzamos el proceso
+        proc = subprocess.Popen(
+            [python_exe, worker_script],
+            env=env
+        )
+        workers[worker_id] = proc
 
 def stop_worker(worker_id):
     if worker_id in workers:

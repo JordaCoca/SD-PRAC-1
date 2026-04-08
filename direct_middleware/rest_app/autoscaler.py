@@ -39,7 +39,7 @@ def start_worker(i):
     log_file = open(f"logging/worker_{i}.log", "w")
 
     p = subprocess.Popen(
-        ["uvicorn", "app.main:app", "--port", str(port), "--log-level", "warning", "--timeout-keep-alive", "5"],
+        ["uvicorn", "rest_app.main:app", "--port", str(port), "--log-level", "warning", "--timeout-keep-alive", "5"],
         env=env,
         stdout=log_file,
         stderr=log_file

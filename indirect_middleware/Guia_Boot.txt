@@ -14,7 +14,7 @@ rabbitmqctl purge_queue ticket_queue
             EJECUCIÓN
 ====================================
 
-1 - Terminal 1 (lanzamos loadBalancer): uvicorn app.load_balancer:app --port 8080
+1 - Terminal 1 (lanzamos loadBalancer):  uvicorn mq_app.load_balancer:app --host 127.0.0.1 --port 8080
 2 - Terminal 2 (lanzamos el autoscaler): python app/autoscaler_mq.py
 3 - Terminal 3 (limpiamos redis): curl.exe -X POST http://127.0.0.1:8080/reset
 4 - Ejecutar el stress_test.py
