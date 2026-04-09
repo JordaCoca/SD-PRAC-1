@@ -20,7 +20,7 @@ class BuyRequest(BaseModel):
 
 
 @app.post("/buy")
-async def buy(req: BuyRequest):
+def buy(req: BuyRequest):
     # 1. Registro de entrada
     r.incr(f"metrics:{WORKER_ID}:requests_received")
     success = False
