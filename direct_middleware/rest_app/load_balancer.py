@@ -9,7 +9,7 @@ app = FastAPI()
 workers = []
 worker_cycle = None
 client = httpx.AsyncClient()
-MAX_SEATS = 2000
+MAX_SEATS = 20000
 
 # Conectamos el Load Balancer a Redis para que pueda hacer el reset global
 r_db = redis.Redis(host="localhost", port=6379, decode_responses=True)
@@ -66,22 +66,31 @@ async def proxy_buy(req: Request):
     return {"status": "FAIL", "reason": "all workers failed"}
 
 
-
 @app.get("/metrics")
-def metrics():
-    aggregated = {}
+def get_metrics():
+    # Obtenemos todas las llaves de métricas
+    keys = r_db.keys("metrics:*")
+    stats = {"received": 0, "processed": 0, "success": 0, "fail": 0}
 
-    for w in workers:
+    for k in keys:
         try:
-            r = requests.get(f"{w}/metrics", timeout=0.5)
-            data = r.json()
+            val = r_db.get(k)
+            if val is None: continue
+            v = int(val)
 
-            for k, v in data.items():
-                aggregated[k] = aggregated.get(k, 0) + v
-        except:
-            pass
+            # Filtramos por el SUFIJO exacto para evitar errores de coincidencia
+            if k.endswith(":success"):
+                stats["success"] += v
+            elif k.endswith(":fail"):
+                stats["fail"] += v
+            elif k.endswith(":requests_received"):
+                stats["received"] += v
+            elif k.endswith(":requests_processed"):
+                stats["processed"] += v
+        except Exception as e:
+            continue
 
-    return aggregated
+    return stats
 
 
 @app.post("/reset")

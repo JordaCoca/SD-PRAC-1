@@ -1,0 +1,9 @@
+Instrucciones para ejecutar el Test:
+
+    Arranca Redis.
+
+    Lanza el Load Balancer (uvicorn rest_app.load_balancer:app --port 8080).
+
+    Lanza el Autoscaler (python rest_app/autoscaler.py).
+
+    Ejecuta el Benchmark Runner (python benchmark_runner_rest.py).
