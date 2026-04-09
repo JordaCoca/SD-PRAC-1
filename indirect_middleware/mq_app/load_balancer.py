@@ -3,17 +3,16 @@ import redis
 import pika
 
 app = FastAPI()
-
-# Conexión a Redis para Reset y para leer Métricas
 r_db = redis.Redis(host="localhost", port=6379, decode_responses=True)
+
 
 @app.post("/reset")
 def reset_total():
-    # 1. Limpiar Redis (Asientos y Estadísticas)
+    # 1. Limpiar Redis (Borra everything)
     r_db.flushall()
 
-    # 2. Inicializar 20,000 asientos
-    MAX_SEATS = 100    # ATENCIÓN: PONER AL FINAL PARA ENTREGA 2.000
+    # 2. Inicializar 20.000 asientos
+    MAX_SEATS = 20000
     seats = list(range(1, MAX_SEATS + 1))
     pipe = r_db.pipeline()
     for i in range(0, len(seats), 5000):
@@ -24,56 +23,53 @@ def reset_total():
     try:
         connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
         channel = connection.channel()
+        channel.queue_declare(queue='ticket_queue', durable=True)
         channel.queue_purge(queue='ticket_queue')
         connection.close()
-        mq_status = "Queue purged."
-    except:
-        mq_status = "Queue purge failed (maybe it didn't exist)."
+    except Exception as e:
+        print(f"Error purging queue: {e}")
 
-    return {"status": "OK", "detail": f"System wiped. {mq_status}"}
+    return {"status": "OK", "detail": "System wiped and ready."}
 
 
 @app.get("/metrics")
 def get_metrics():
-    aggregated = {
-        "received": 0,
-        "processed": 0,
-        "success": 0
-    }
-
-    # Buscamos todas las claves que empiecen por metrics:mq-*
-    keys = r_db.keys("metrics:mq-*")
-    for key in keys:
-        # key suele ser "metrics:mq-1:success", etc.
-        val = int(r_db.get(key) or 0)
-        if "received" in key: aggregated["received"] += val
-        if "processed" in key: aggregated["processed"] += val
-        if "success" in key: aggregated["success"] += val
-
-    return aggregated
-
-
-@app.get("/metrics")
-def get_global_metrics():
-    # Buscamos todas las llaves de métricas de cualquier worker MQ
+    # Buscamos todas las llaves que sigan el patrón de tus workers
+    # Tu worker usa: f"metrics:{WORKER_ID}:success", etc.
     keys = r_db.keys("metrics:mq-*")
 
     total_received = 0
     total_success = 0
     total_fail = 0
+    total_processed = 0
+    workers_ids = set()
 
     for key in keys:
+        # Extraemos el ID del worker para contarlos
+        # key es metrics:mq-bench-1:success -> split(":")[1] es mq-bench-1
+        parts = key.split(":")
+        if len(parts) >= 2:
+            workers_ids.add(parts[1])
+
         value = int(r_db.get(key) or 0)
-        if ":requests_received" in key:
+
+        if "requests_received" in key:
             total_received += value
-        elif ":success" in key:
+        elif "success" in key:
             total_success += value
-        elif ":fail" in key:
+        elif "fail" in key:
             total_fail += value
+        elif "requests_processed" in key:
+            total_processed += value
+
+    # Si por alguna razón processed no está en Redis, lo calculamos
+    if total_processed == 0:
+        total_processed = total_success + total_fail
 
     return {
-        "total_requests_received": total_received,
-        "total_success": total_success,
-        "total_fail": total_fail,
-        "active_workers": len(set(k.split(":")[1] for k in keys))
+        "received": total_received,
+        "processed": total_processed,
+        "success": total_success,
+        "fail": total_fail,
+        "active_workers": len(workers_ids)
     }

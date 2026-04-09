@@ -10,34 +10,50 @@ WORKER_ID = os.getenv("WORKER_ID", "worker-mq-default")
 
 
 def callback(ch, method, properties, body):
-    data = json.loads(body)
-    client_id = data['client_id']
-    seat_id = data.get('seat_id')  # Puede ser None en Unnumbered
+    try:
+        # 1. Cargar datos del mensaje
+        data = json.loads(body)
+        client_id = data.get('client_id')
+        seat_id = data.get('seat_id')
 
-    # --- MÉTRICAS ---
-    r.incr(f"metrics:{WORKER_ID}:requests_received")
-    time.sleep(0.005)  # Latencia artificial del enunciado
+        # 2. Registrar recepción
+        r.incr(f"metrics:{WORKER_ID}:requests_received")
+        success = False
 
-    # --- LÓGICA DE NEGOCIO (Consistencia) ---
-    success = False
+        # 3. Lógica de negocio con validación
+        if seat_id is None:  # --- MODELO UNNUMBERED ---
+            # El límite lo da el inventario físico en el SET de Redis
+            if r.spop("available_seats"):
+                success = True
+        else:  # --- MODELO NUMBERED ---
+            # Validamos que el asiento esté entre 1 y 20.000 (según enunciado)
+            try:
+                s_id = int(seat_id)
+                if 1 <= s_id <= 20000:
+                    # SETNX intenta crear la llave; si ya existe, devuelve False
+                    if r.setnx(f"seat:{s_id}", client_id):
+                        success = True
+                else:
+                    # Asiento fuera de rango (ej: 25.000) -> Fallo
+                    success = False
+            except (ValueError, TypeError):
+                # Si el seat_id no es un número válido -> Fallo
+                success = False
 
-    if seat_id is None:  # UNNUMBERED
-        if r.spop("available_seats"):
-            success = True
-    else:  # NUMBERED
-        if r.setnx(f"seat:{seat_id}", client_id):
-            success = True
+        # 4. Registro de métricas finales (Éxito o Fallo)
+        if success:
+            r.incr(f"metrics:{WORKER_ID}:success")
+        else:
+            r.incr(f"metrics:{WORKER_ID}:fail")
 
-    # --- REGISTRO DE RESULTADO ---
-    if success:
-        r.incr(f"metrics:{WORKER_ID}:success")
-    else:
-        r.incr(f"metrics:{WORKER_ID}:fail")
-    r.incr(f"metrics:{WORKER_ID}:requests_processed")
+        # Esta métrica es la que usa el benchmark para saber cuándo terminar
+        r.incr(f"metrics:{WORKER_ID}:requests_processed")
 
-    # --- CONFIRMACIÓN (ACK) ---
-    # Le dice a Rabbit: "Ya he terminado, puedes borrar el mensaje de la cola"
-    ch.basic_ack(delivery_tag=method.delivery_tag)
+    except Exception as e:
+        print(f" [!] Error crítico en worker {WORKER_ID}: {e}")
+    finally:
+        # 5. SIEMPRE enviar el ACK para que el mensaje no se quede en "Unacked"
+        ch.basic_ack(delivery_tag=method.delivery_tag)
 
 
 def start_worker():
