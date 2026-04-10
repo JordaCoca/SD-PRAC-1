@@ -57,8 +57,8 @@ async def proxy_buy(req: Request):
     for _ in range(3):
         worker = next(worker_cycle)
         try:
-            # Bajamos un poco el timeout para no hacer esperar al cliente
-            r = await client.post(f"{worker}/buy", json=data, timeout=1.5)
+            # Bajamos un poco el timeout para no hacer esperar al cliente, le aumento el margen d reintento
+            r = await client.post(f"{worker}/buy", json=data, timeout=5.0)
             return r.json()
         except (httpx.ConnectError, httpx.TimeoutException):
             print(f" Worker {worker} falló. Reintentando con otro...")

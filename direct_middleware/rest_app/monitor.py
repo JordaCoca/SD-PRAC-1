@@ -1,13 +1,13 @@
-import redis
+import requests
+import time
 
-r = redis.Redis(host="localhost", port=6379, decode_responses=True)
+URL = "http://127.0.0.1:8080/metrics"
 
-print("--- LISTADO DE LLAVES DE MÉTRICAS EN REDIS ---")
-keys = r.keys("metrics:*")
-if not keys:
-    print("No se encontraron llaves que empiecen por 'metrics:'")
-else:
-    for k in sorted(keys):
-        val = r.get(k)
-        print(f"{k} => {val}")
-print("----------------------------------------------")
+while True:
+    try:
+        r = requests.get(URL)
+        print(r.json())
+    except:
+        print("No metrics yet...")
+
+    time.sleep(2)

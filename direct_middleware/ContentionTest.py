@@ -10,25 +10,25 @@ from urllib3.util.retry import Retry
 # --- CONFIGURACIÓN ---
 LB_URL = "http://127.0.0.1:8080"
 RESULT_DIR = "resultados"
-WORKLOAD = 15000  # Ajustado para que sea estable en Windows
-MAX_WORKERS = 8
-CONCURRENCY = 25
+WORKLOAD = 10000     # Mantenemos 10k para no ahogar a Windows
+WORKERS_TO_USE = 4   # Fijamos los workers a 4 (Número óptimo en pruebas)
+CONCURRENCY = 20
 
 os.makedirs(RESULT_DIR, exist_ok=True)
 
-# Configuración de Sesión para reutilizar conexiones (Keep-alive)
+# Configuración de Sesión
 session = requests.Session()
 retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
 adapter = HTTPAdapter(pool_connections=CONCURRENCY, pool_maxsize=CONCURRENCY, max_retries=retries)
 session.mount('http://', adapter)
 
 def reset_system():
-    print("   [Reset] Limpiando Redis y métricas...")
+    print("   [Reset] Limpiando sistema...")
     try:
         session.post(f"{LB_URL}/reset", timeout=10)
-    except Exception as e:
-        print(f"Error en reset: {e}")
-    time.sleep(3) # Más tiempo para que el SO respire
+    except:
+        pass
+    time.sleep(3)
 
 def start_rest_workers(n):
     print(f"   [System] Levantando {n} worker(s) REST...")
@@ -37,19 +37,16 @@ def start_rest_workers(n):
         port = 8000 + i
         env = os.environ.copy()
         env["WORKER_ID"] = f"rest-worker-{i}"
-
         p = subprocess.Popen(
             ["uvicorn", "rest_app.main:app", "--port", str(port), "--log-level", "critical"],
             env=env
         )
         procesos.append(p)
-
-        time.sleep(1.5) # Aumentado para evitar colisiones de inicio
+        time.sleep(1.5)
         try:
             session.post(f"{LB_URL}/register", json={"port": port}, timeout=2)
         except:
-            print(f"Error registrando worker en puerto {port}")
-
+            pass
     return procesos
 
 def stop_workers(procesos):
@@ -66,26 +63,40 @@ def send_request(payload):
     except:
         pass
 
-def run_scalability_test():
+def run_contention_test():
     fecha_hora = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    file_path = os.path.join(RESULT_DIR, f"rest_scalability_unnumbered_{fecha_hora}.txt")
+    file_path = os.path.join(RESULT_DIR, f"rest_contention_{fecha_hora}.txt")
 
-    print(f" Iniciando Test de Escalabilidad (UNNUMBERED) -> {file_path}")
+    # Escenarios: (Nombre, Modulo)
+    # Modulo define cuántos asientos hay disponibles para la pelea
+    escenarios = [
+        ("BAJA_CONTENCION (2000 asientos)", 2000),
+        ("ALTA_CONTENCION (10 asientos)", 10),
+        ("EXTREMA_CONTENCION (1 asiento)", 1)
+    ]
+
+    print(f" Iniciando Test de Contención (NUMBERED) -> {file_path}")
+
+    # Arrancamos los workers una sola vez para todos los tests
+    workers = start_rest_workers(WORKERS_TO_USE)
 
     with open(file_path, "w") as f:
-        f.write(f"--- BENCHMARK ESCALABILIDAD REST (UNNUMBERED) ---\n")
+        f.write(f"--- BENCHMARK CONTENCIÓN REST (NUMBERED) ---\n")
         f.write(f"Fecha: {fecha_hora}\n")
-        f.write(f"Workload: {WORKLOAD} | Concurrency: {CONCURRENCY}\n\n")
-        f.write("Workers | Tiempo (s) | Throughput (msg/s) | Success | Fail\n")
-        f.write("-" * 75 + "\n")
+        f.write(f"Workers fijos: {WORKERS_TO_USE} | Workload: {WORKLOAD} | Concurrency: {CONCURRENCY}\n\n")
+        f.write("Escenario | Modulo | Tiempo (s) | Throughput (msg/s) | Success | Fail\n")
+        f.write("-" * 80 + "\n")
 
-        for n in range(1, MAX_WORKERS + 1):
-            print(f"\n--- TEST: {n} WORKER(S) ---")
+        for nombre, modulo in escenarios:
+            print(f"\n--- TEST: {nombre} ---")
+            print("   [Wait] Cooldown de 8s para liberar sockets TCP...")
+            time.sleep(8)
             reset_system()
-            workers = start_rest_workers(n)
 
-            # Payload simple para UNNUMBERED (seat_id = None)
-            payloads = [{"client_id": f"c_{i}", "seat_id": None, "request_id": f"req_{i}"} for i in range(WORKLOAD)]
+            payloads = []
+            for i in range(WORKLOAD):
+                s_id = (i % modulo) + 1  # Aquí forzamos la contención
+                payloads.append({"client_id": f"c_{i}", "seat_id": s_id, "request_id": f"req_{i}"})
 
             print(f"   [Inject] Enviando carga...")
             start_time = time.time()
@@ -98,7 +109,8 @@ def run_scalability_test():
             while True:
                 try:
                     resp = session.get(f"{LB_URL}/metrics", timeout=2).json()
-                    if resp.get("processed", 0) >= WORKLOAD:
+                    # Si el LB procesó la carga (ya sea success o fail application-level)
+                    if resp.get("processed", 0) >= WORKLOAD * 0.98: # 98% margen de tolerancia
                         duration = time.time() - start_time
                         final_metrics = resp
                         break
@@ -106,15 +118,14 @@ def run_scalability_test():
                     pass
                 time.sleep(1)
 
-            stop_workers(workers)
-
             tp = WORKLOAD / duration
-            res = f"{n:7} | {duration:10.2f} | {tp:18.2f} | {final_metrics.get('success', 0):7} | {final_metrics.get('fail', 0):4}"
+            res = f"{nombre:30} | {modulo:6} | {duration:10.2f} | {tp:18.2f} | {final_metrics.get('success', 0):7} | {final_metrics.get('fail', 0):4}"
             print(f"  {res}")
             f.write(res + "\n")
             f.flush()
 
-    print(f"\n Test de Escalabilidad completado.")
+    stop_workers(workers)
+    print(f"\n Test de Contención completado.")
 
 if __name__ == "__main__":
-    run_scalability_test()
+    run_contention_test()

@@ -36,13 +36,9 @@ def start_worker(i):
     env = os.environ.copy()
     env["WORKER_ID"] = f"worker{i}"
 
-    log_file = open(f"logging/worker_{i}.log", "w")
-
     p = subprocess.Popen(
         ["uvicorn", "rest_app.main:app", "--port", str(port), "--log-level", "warning", "--timeout-keep-alive", "5"],
         env=env,
-        stdout=log_file,
-        stderr=log_file
     )
 
     workers[i] = {"proc": p, "port": port}
@@ -71,7 +67,6 @@ def stop_worker(i):
 
     # 2. ESPERA DE CORTESÍA (Draining time)
     # Damos tiempo a que las peticiones que ya estaban "en vuelo" terminen.
-    # Como tu latencia es de 0.005s, con 0.5s o 1s vas sobradísimo.
     time.sleep(1.0)
 
     # 3. AHORA SÍ, MATAR EL PROCESO
