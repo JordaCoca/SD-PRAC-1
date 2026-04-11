@@ -1,0 +1,9 @@
+--- BENCHMARK CONTENCIÓN REST (NUMBERED) ---
+Fecha: 2026-04-11_18-40-26
+Workers fijos: 4 | Workload: 10000 | Concurrency: 20
+
+Escenario | Modulo | Tiempo (s) | Throughput (msg/s) | Success | Fail
+--------------------------------------------------------------------------------
+BAJA_CONTENCION (2000 asientos) |   2000 |      24.29 |             411.74 |    2000 | 8000
+ALTA_CONTENCION (10 asientos)  |     10 |      22.86 |             437.48 |      10 | 9990
+EXTREMA_CONTENCION (1 asiento) |      1 |      27.35 |             365.63 |       1 | 9999

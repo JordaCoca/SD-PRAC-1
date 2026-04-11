@@ -41,21 +41,26 @@ def buy(req: BuyRequest):
 
     # --- CASO B: ASIENTO NUMERADO (NUMBERED) ---
     else:
-        # Validación de rango
-        if req.seat_id < 1 or req.seat_id > MAX_SEATS:
-            r.incr(f"metrics:{WORKER_ID}:fail")
-            r.incr(f"metrics:{WORKER_ID}:requests_processed")
-            return {"status": "FAIL", "reason": "invalid seat"}
+        lock_key = f"lock:seat:{req.seat_id}"
+        seat_key = f"seat:{req.seat_id}"
 
-        key = f"seat:{req.seat_id}"
+        # Intentar adquirir un lock (spin-lock manual)
+        # Seteamos un tiempo de vida (PX) para evitar deadlocks si el worker muere
+        acquired = r.set(lock_key, "locked", nx=True, px=1000)
 
-        # Intentamos reservar el asiento
-        if r.setnx(key, req.client_id):
-            # Éxito: lo quitamos de la bolsa de disponibles (opcional según tu lógica)
-            r.srem("available_seats", req.seat_id)
-            success = True
+        if acquired:
+            try:
+                # Verificar si ya está vendido
+                if r.exists(seat_key):
+                    success = False
+                else:
+                    r.set(seat_key, req.client_id)
+                    success = True
+            finally:
+                # Liberar el lock
+                r.delete(lock_key)
         else:
-            # Fallo: el asiento ya tenía dueño
+            # No se pudo obtener el lock (Contención detectada)
             success = False
 
     # --- REGISTRO FINAL UNIFICADO ---
