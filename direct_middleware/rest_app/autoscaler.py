@@ -23,6 +23,7 @@ SCALE_DOWN_COOLDOWN = 3  # segundos sin presión antes de bajar
 
 ALPHA = 0.3  # smoothing EMA
 
+# RETOCAR CON LA IP DE LA TORRE/OTRA MAQUINA
 LB_URL = "http://127.0.0.1:8080"
 
 last_scale_down_time = time.time()
