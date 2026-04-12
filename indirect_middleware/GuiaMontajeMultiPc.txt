@@ -1,0 +1,48 @@
+================================================================
+GUÍA DE MONTAJE: SISTEMA INDIRECTO (RABBITMQ + WORKERS)
+================================================================
+
+--- CONFIGURACIÓN EN EL PC SOBREMESA (SERVIDOR) ---
+
+1. LEVANTAR INFRAESTRUCTURA (DOCKER)
+   Levanta Redis y RabbitMQ con un usuario administrativo:
+   $ docker run -d --name redis-server -p 6379:6379 redis redis-server --protected-mode no
+
+   $ docker run -d --name rabbitmq-server -p 5672:5672 -p 15672:15672 \
+     -e RABBITMQ_DEFAULT_USER=admin \
+     -e RABBITMQ_DEFAULT_PASS=superpassword \
+     rabbitmq:3-management
+
+2. LEVANTAR EL MONITOR (LOAD BALANCER / METRICS)
+   Este servicio servirá para que el cliente limpie el sistema y lea métricas:
+   $ uvicorn mq_metrics_app:app --host 0.0.0.0 --port 8080
+
+3. LEVANTAR LOS CONSUMIDORES (WORKERS MQ)
+   Abre 4 (o hasta 8) terminales y lanza los workers que consumen de la cola:
+   $ set WORKER_ID=mq-1 && python mq_worker.py
+   Nota: El worker debe conectar a localhost usando admin/superpassword.
+
+4. IDENTIFICAR IP DEL SERVIDOR
+   $ ipconfig (ej: 192.168.1.50)
+
+
+--- CONFIGURACIÓN EN EL PORTÁTIL (CLIENTE) ---
+
+1. CONFIGURAR EL SCRIPT DE INYECCIÓN
+   En tu script de benchmark del portátil, ajusta las credenciales de Pika:
+
+   credenciales = pika.PlainCredentials('admin', 'superpassword')
+   parametros = pika.ConnectionParameters('192.168.1.50', 5672, '/', credenciales)
+
+   Y la URL de métricas:
+   REST_URL = "http://192.168.1.50:8080"
+
+2. EJECUTAR BENCHMARK
+   $ python benchmark_runner_v2.py
+   Nota: Comenta la función 'start_workers' en el script del portátil,
+   ya que los workers ya están corriendo en el sobremesa.
+
+3. MONITOREO
+   Abre en el navegador del portátil: http://192.168.1.50:15672
+   Entra con admin / superpassword para ver la cola en tiempo real.
+================================================================

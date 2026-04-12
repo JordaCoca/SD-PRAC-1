@@ -1,0 +1,41 @@
+================================================================
+GUÍA DE MONTAJE: SISTEMA DIRECTO (REST + LOAD BALANCER)
+================================================================
+
+--- CONFIGURACIÓN EN EL PC SOBREMESA (SERVIDOR) ---
+
+1. LEVANTAR INFRAESTRUCTURA (DOCKER)
+   Abre una terminal y ejecuta Redis:
+   $ docker run -d --name redis-server -p 6379:6379 redis redis-server --protected-mode no
+
+2. LEVANTAR WORKERS (BACKEND)
+   Abre 4 terminales diferentes y levanta una instancia en cada una:
+   $ uvicorn main:app --port 8001
+   $ uvicorn main:app --port 8002
+   $ uvicorn main:app --port 8003
+   $ uvicorn main:app --port 8004
+   Nota: Asegúrate de que el código del worker use localhost:6379 para Redis.
+
+3. LEVANTAR LOAD BALANCER (FRONTEND)
+   Abre una terminal nueva. El host 0.0.0.0 es VITAL para recibir tráfico externo:
+   $ uvicorn lb_main:app --host 0.0.0.0 --port 8080
+   Nota: El LB debe tener en su lista de targets las IPs locales (127.0.0.1)
+   y puertos de los workers (8001-8004).
+
+4. IDENTIFICAR IP DEL SERVIDOR
+   $ ipconfig (Busca IPv4, ej: 192.168.1.50)
+
+
+--- CONFIGURACIÓN EN EL PORTÁTIL (CLIENTE) ---
+
+1. CONFIGURAR EL SCRIPT DE PRUEBA
+   Abre tu archivo 'super_stress_test_rest.py' y edita la URL:
+   LB_URL = "http://192.168.1.50:8080"  <-- IP del Sobremesa
+
+2. EJECUTAR BENCHMARK
+   Asegúrate de tener instalada la librería 'requests'.
+   $ python super_stress_test_rest.py
+
+3. VALIDACIÓN
+   Revisa la carpeta 'resultados' en el portátil para ver el throughput.
+================================================================
