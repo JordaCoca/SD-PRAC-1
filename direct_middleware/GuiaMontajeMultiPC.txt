@@ -18,19 +18,24 @@ GUÍA DE MONTAJE: SISTEMA DIRECTO (REST + LOAD BALANCER)
 
 3. LEVANTAR LOAD BALANCER (FRONTEND)
    Abre una terminal nueva. El host 0.0.0.0 es VITAL para recibir tráfico externo:
-   $ uvicorn lb_main:app --host 0.0.0.0 --port 8080
+   $ uvicorn mq_app.load_balancer:app --host 0.0.0.0 --port 8080
    Nota: El LB debe tener en su lista de targets las IPs locales (127.0.0.1)
    y puertos de los workers (8001-8004).
 
 4. IDENTIFICAR IP DEL SERVIDOR
    $ ipconfig (Busca IPv4, ej: 192.168.1.50)
 
+5. PROVAR LA CONEXIÓN
+    $ curl http://${IP_SOBREMESA}:8080/metrics
+    si everything okay deberia de printar:
+    {"received":0,"processed":0,"success":0,"fail":0}
+
 
 --- CONFIGURACIÓN EN EL PORTÁTIL (CLIENTE) ---
 
 1. CONFIGURAR EL SCRIPT DE PRUEBA
    Abre tu archivo 'super_stress_test_rest.py' y edita la URL:
-   LB_URL = "http://192.168.1.50:8080"  <-- IP del Sobremesa
+   LB_URL = "http://${IP_SOBREMESA}:8080"  <-- IP del Sobremesa
 
 2. EJECUTAR BENCHMARK
    Asegúrate de tener instalada la librería 'requests'.
