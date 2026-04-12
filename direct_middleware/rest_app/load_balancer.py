@@ -28,8 +28,7 @@ def update_cycle():
 async def scale_rest(num_workers: int):
     global active_processes, workers, worker_cycle
 
-    # 1. Limpieza total de procesos anteriores
-    print(f"--- Deteniendo {len(active_processes)} workers anteriores ---")
+    # 1. Limpieza (Igual que antes)
     for p in active_processes:
         try:
             p.terminate()
@@ -37,33 +36,28 @@ async def scale_rest(num_workers: int):
             pass
     active_processes = []
 
-    # Limpiamos la lista de URLs para el balanceo
-    workers = []
-    update_cycle()
+    workers = []  # Vaciamos la lista de URLs
 
-    # 2. Lanzar nuevos workers
+    # 2. Lanzar y REGISTRAR
     for i in range(num_workers):
         port = 8001 + i
+        # USAMOS LOCALHOST porque el LB y el Worker están en la misma Torre
+        url = f"http://127.0.0.1:{port}"
+        workers.append(url)  # <--- Esencial para q funcionen los buys º_º
+
         env = os.environ.copy()
         env["WORKER_ID"] = f"worker-{port}"
 
-        # El comando que el LB ejecuta por ti:
-        cmd = [
-            sys.executable, "-m", "uvicorn",
-            "rest_app.main:app",
-            "--port", str(port),
-            "--host", "127.0.0.1"
-        ]
+        cmd = [sys.executable, "-m", "uvicorn", "rest_app.main:app",
+               "--port", str(port), "--host", "127.0.0.1"]
 
         p = subprocess.Popen(cmd, env=env)
         active_processes.append(p)
-        print(f"Lanzando worker en puerto {port}...")
 
-    return {
-        "status": "scaling_initiated",
-        "workers_spawned": num_workers,
-        "note": "Los workers se registrarán automáticamente en unos segundos"
-    }
+    update_cycle()  # Refrescamos el iterador para el Round Robin
+    print(f"Sistema escalado a {num_workers} workers: {workers}")
+
+    return {"status": "scaled", "active_workers": workers}
 
 @app.post("/register")
 def register(data: dict):
