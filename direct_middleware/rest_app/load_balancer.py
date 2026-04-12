@@ -1,3 +1,7 @@
+import os
+import subprocess
+import sys
+
 import redis
 from fastapi import FastAPI, Request
 import requests
@@ -6,7 +10,8 @@ import httpx
 
 app = FastAPI()
 
-workers = []
+workers = []                        # url de los workers
+active_processes = []               # listado d los workers
 worker_cycle = None
 client = httpx.AsyncClient()
 MAX_SEATS = 20000
@@ -18,6 +23,47 @@ def update_cycle():
     global worker_cycle
     worker_cycle = itertools.cycle(workers) if workers else None
 
+# Para escalar más facilmente
+@app.post("/scale")
+async def scale_rest(num_workers: int):
+    global active_processes, workers, worker_cycle
+
+    # 1. Limpieza total de procesos anteriores
+    print(f"--- Deteniendo {len(active_processes)} workers anteriores ---")
+    for p in active_processes:
+        try:
+            p.terminate()
+        except:
+            pass
+    active_processes = []
+
+    # Limpiamos la lista de URLs para el balanceo
+    workers = []
+    update_cycle()
+
+    # 2. Lanzar nuevos workers
+    for i in range(num_workers):
+        port = 8001 + i
+        env = os.environ.copy()
+        env["WORKER_ID"] = f"worker-{port}"
+
+        # El comando que el LB ejecuta por ti:
+        cmd = [
+            sys.executable, "-m", "uvicorn",
+            "rest_app.main:app",
+            "--port", str(port),
+            "--host", "127.0.0.1"
+        ]
+
+        p = subprocess.Popen(cmd, env=env)
+        active_processes.append(p)
+        print(f"Lanzando worker en puerto {port}...")
+
+    return {
+        "status": "scaling_initiated",
+        "workers_spawned": num_workers,
+        "note": "Los workers se registrarán automáticamente en unos segundos"
+    }
 
 @app.post("/register")
 def register(data: dict):

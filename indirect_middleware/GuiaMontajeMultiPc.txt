@@ -8,14 +8,11 @@ GUÍA DE MONTAJE: SISTEMA INDIRECTO (RABBITMQ + WORKERS)
    Levanta Redis y RabbitMQ con un usuario administrativo:
    $ docker run -d --name redis-server -p 6379:6379 redis redis-server --protected-mode no
 
-   $ docker run -d --name rabbitmq-server -p 5672:5672 -p 15672:15672 \
-     -e RABBITMQ_DEFAULT_USER=admin \
-     -e RABBITMQ_DEFAULT_PASS=superpassword \
-     rabbitmq:3-management
+   $ docker run -d --name rabbitmq-server -p 5672:5672 -p 15672:15672 -e RABBITMQ_DEFAULT_USER=admin -e RABBITMQ_DEFAULT_PASS=superpassword rabbitmq:3-management
 
 2. LEVANTAR EL MONITOR (LOAD BALANCER / METRICS)
    Este servicio servirá para que el cliente limpie el sistema y lea métricas:
-   $ uvicorn mq_metrics_app:app --host 0.0.0.0 --port 8080
+   $  uvicorn mq_app.load_balancer:app --host 0.0.0.0 --port 8080
 
 3. LEVANTAR LOS CONSUMIDORES (WORKERS MQ)
    Abre 4 (o hasta 8) terminales y lanza los workers que consumen de la cola:

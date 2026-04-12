@@ -18,7 +18,7 @@ GUÍA DE MONTAJE: SISTEMA DIRECTO (REST + LOAD BALANCER)
 
 3. LEVANTAR LOAD BALANCER (FRONTEND)
    Abre una terminal nueva. El host 0.0.0.0 es VITAL para recibir tráfico externo:
-   $ uvicorn mq_app.load_balancer:app --host 0.0.0.0 --port 8080
+   $ uvicorn rest_app.load_balancer:app --host 0.0.0.0 --port 8080
    Nota: El LB debe tener en su lista de targets las IPs locales (127.0.0.1)
    y puertos de los workers (8001-8004).
 

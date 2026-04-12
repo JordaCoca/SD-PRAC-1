@@ -1,3 +1,7 @@
+import os
+import subprocess
+import sys
+
 from fastapi import FastAPI
 import redis
 import pika
@@ -31,6 +35,29 @@ def reset_total():
 
     return {"status": "OK", "detail": "System wiped and ready."}
 
+# Nuevo endpoint, para que se pueda hacer una petición desde otra maquina y así poder pedir más workers
+@app.post("/scale")
+async def scale_workers(num_workers: int):
+    global active_workers
+
+    # 1. Matamos los workers actuales si los hay
+    for p in active_workers:
+        p.terminate()
+    active_workers = []
+
+    # 2. Levantamos el nuevo número de workers
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    # Ajusta esta ruta a donde tengas el mq_worker.py en la torre
+    worker_script = os.path.join(base_path, "mq_worker.py")
+    python_exe = sys.executable
+
+    for i in range(num_workers):
+        env = os.environ.copy()
+        env["WORKER_ID"] = f"remote-worker-{i + 1}"
+        p = subprocess.Popen([python_exe, worker_script], env=env)
+        active_workers.append(p)
+
+    return {"status": "scaled", "total_workers": len(active_workers)}
 
 @app.get("/metrics")
 def get_metrics():
