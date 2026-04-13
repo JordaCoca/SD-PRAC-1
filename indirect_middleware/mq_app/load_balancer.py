@@ -5,10 +5,11 @@ import sys
 from fastapi import FastAPI
 import redis
 import pika
+from pika import PlainCredentials
 
 app = FastAPI()
 r_db = redis.Redis(host="localhost", port=6379, decode_responses=True)
-
+active_workers = []
 
 @app.post("/reset")
 def reset_total():
@@ -25,7 +26,9 @@ def reset_total():
 
     # 3. Limpiar RabbitMQ
     try:
-        connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+        credentials = PlainCredentials('admin', 'superpassword')
+        parameters = pika.ConnectionParameters('localhost', credentials=credentials)
+        connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
         channel.queue_declare(queue='ticket_queue', durable=True)
         channel.queue_purge(queue='ticket_queue')

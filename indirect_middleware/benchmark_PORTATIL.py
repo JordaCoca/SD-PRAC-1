@@ -1,115 +1,148 @@
 import os
 import time
 import requests
+import pika
+import json
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from pika import PlainCredentials
 
-# --- CONFIGURACIÓN ---
-TOWER_IP = "ip"  # <--- IP D LA TORRE
+# --- CONFIGURACIÓN DE RED ---
+TOWER_IP = "ip"  # <--- IP
 LB_URL = f"http://{TOWER_IP}:8080"
 RESULT_DIR = "resultados"
-WORKLOAD = 15000
+QUEUE_NAME = 'ticket_queue'
+WORKLOAD = 50000
 MAX_WORKERS = 8
-CONCURRENCY = 25
+
+# --- CREDENCIALES RABBITMQ ---
+# Usamos las que definiste en tu comando de Docker
+RABBIT_USER = 'admin'
+RABBIT_PASS = 'superpassword'
 
 os.makedirs(RESULT_DIR, exist_ok=True)
 
-# Configuración de Sesión
-session = requests.Session()
-retries = Retry(total=5, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
-adapter = HTTPAdapter(pool_connections=CONCURRENCY, pool_maxsize=CONCURRENCY, max_retries=retries)
-session.mount('http://', adapter)
-
 
 def reset_system():
-    print("   [Reset] Limpiando Redis y métricas en la Torre...")
+    """Llama al reset de la torre (limpia Redis y purga RabbitMQ)"""
+    print(f"   [Reset] Pidiendo a la torre {TOWER_IP} que limpie el sistema...")
     try:
-        session.post(f"{LB_URL}/reset", timeout=10)
+        requests.post(f"{LB_URL}/reset", timeout=15)
     except Exception as e:
-        print(f"Error en reset: {e}")
+        print(f"   [!] Error en reset: {e}")
     time.sleep(2)
 
 
 def scale_remote_workers(n):
-    """Llamada al mando a distancia para gestionar workers en la Torre"""
-    print(f"   [Remote] Escalando a {n} worker(s) en la Torre...")
+    """Usa el endpoint /scale del Load Balancer para gestionar workers en la torre"""
+    print(f"   [Remote] Escalando a {n} worker(s) en la torre...")
     try:
-        # Llamamos a tu nuevo endpoint /scale
-        resp = session.post(f"{LB_URL}/scale?num_workers={n}", timeout=15)
+        resp = requests.post(f"{LB_URL}/scale?num_workers={n}", timeout=15)
         if resp.status_code == 200:
-            print(f"   [OK] Torre confirma: {n} workers activos.")
-        else:
-            print(f"   [!] Error al escalar: {resp.text}")
+            print(f"   [OK] Torre confirma: {resp.json().get('total_workers')} workers activos.")
     except Exception as e:
-        print(f"   [!] Fallo de conexión al escalar: {e}")
-
-    # Damos 4 segundos para que los procesos uvicorn arranquen y se registren
-    time.sleep(4)
+        print(f"   [!] Error al escalar remotamente: {e}")
+    time.sleep(2)  # Tiempo de cortesía para que los workers conecten a la cola
 
 
-def send_request(payload):
+def inject_workload(mode="unnumbered"):
+    """Conecta al RabbitMQ de la torre e inyecta la carga"""
+    # Configuración de credenciales para saltar el bloqueo de 'guest'
+    credentials = PlainCredentials(RABBIT_USER, RABBIT_PASS)
+    parameters = pika.ConnectionParameters(host=TOWER_IP, credentials=credentials)
+
     try:
-        session.post(f"{LB_URL}/buy", json=payload, timeout=10)
-    except:
-        pass
+        connection = pika.BlockingConnection(parameters)
+        channel = connection.channel()
+        channel.queue_declare(queue=QUEUE_NAME, durable=True)
+
+        print(f"   [Inject] Enviando {WORKLOAD} peticiones ({mode}) a la torre...")
+        for i in range(WORKLOAD):
+            if mode == "unnumbered":
+                message = {"client_id": f"c_{i}", "seat_id": None, "request_id": f"req_{i}"}
+            else:
+                seat_id = (i % 2000) + 1
+                message = {"client_id": f"c_{i}", "seat_id": seat_id, "request_id": f"req_{i}"}
+
+            channel.basic_publish(
+                exchange='',
+                routing_key=QUEUE_NAME,
+                body=json.dumps(message),
+                properties=pika.BasicProperties(delivery_mode=2)
+            )
+        connection.close()
+    except Exception as e:
+        print(f"   [!] Error inyectando carga: {e}")
 
 
-def run_scalability_test():
+def wait_and_measure(start_time):
+    """Consulta las métricas en la torre hasta que se procese everything"""
+    print("   [Wait] Procesando en la torre...")
+    while True:
+        try:
+            resp = requests.get(f"{LB_URL}/metrics", timeout=5).json()
+            procesados = resp.get("processed", 0)
+            if procesados >= WORKLOAD:
+                end_time = time.time()
+                return end_time - start_time, resp
+        except Exception:
+            pass
+        time.sleep(1)
+
+
+def run_benchmark():
     fecha_hora = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    file_path = os.path.join(RESULT_DIR, f"dist_rest_scalability_{fecha_hora}.txt")
+    file_path = os.path.join(RESULT_DIR, f"dist_stress_mq_50k_PORTATIL.txt")
 
-    print(f" Iniciando Benchmark Distribuido -> {file_path}")
+    print(f" Iniciando Benchmark Distribuido RabbitMQ (Portátil -> Torre) -> {file_path}")
 
     with open(file_path, "w") as f:
-        f.write(f"--- BENCHMARK DISTRIBUIDO REST (PORTÁTIL -> TORRE) ---\n")
-        f.write(f"Fecha: {fecha_hora}\n")
-        f.write(f"Workload: {WORKLOAD} | Concurrency: {CONCURRENCY}\n\n")
+        f.write(f"--- BENCHMARK DISTRIBUIDO MQ (50.000 PETS) ---\n")
+        f.write(f"Torre IP: {TOWER_IP}\n\n")
+
+        # --- FASE 1: UNNUMBERED ---
+        f.write("FASE: UNNUMBERED\n")
         f.write("Workers | Tiempo (s) | Throughput (msg/s) | Success | Fail\n")
         f.write("-" * 75 + "\n")
 
         for n in range(1, MAX_WORKERS + 1):
-            print(f"\n--- TEST: {n} WORKER(S) ---")
-
-            # 1. Resetear datos
+            print(f"\n--- UNNUMBERED: {n} WORKER(S) ---")
             reset_system()
-
-            # 2. Escalar remotamente (Mando a distancia)
             scale_remote_workers(n)
 
-            payloads = [{"client_id": f"c_{i}", "seat_id": None, "request_id": f"req_{i}"} for i in range(WORKLOAD)]
-
-            print(f"   [Inject] Enviando carga desde el portátil...")
             start_time = time.time()
-
-            with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
-                executor.map(send_request, payloads)
-
-            print("   [Wait] Esperando métricas de la Torre...")
-            final_metrics = {}
-            while True:
-                try:
-                    resp = session.get(f"{LB_URL}/metrics", timeout=2).json()
-                    if resp.get("processed", 0) >= WORKLOAD:
-                        duration = time.time() - start_time
-                        final_metrics = resp
-                        break
-                except:
-                    pass
-                time.sleep(1)
+            inject_workload(mode="unnumbered")
+            duration, m = wait_and_measure(start_time)
 
             tp = WORKLOAD / duration
-            res = f"{n:7} | {duration:10.2f} | {tp:18.2f} | {final_metrics.get('success', 0):7} | {final_metrics.get('fail', 0):4}"
+            res = f"{n:7} | {duration:10.2f} | {tp:18.2f} | {m.get('success', 0):7} | {m.get('fail', 0):4}"
             print(f"  {res}")
             f.write(res + "\n")
             f.flush()
 
-        # Limpiar al finalizar: dejamos 0 workers
+        # --- FASE 2: NUMBERED ---
+        f.write("\nFASE: NUMBERED (COLISIONES)\n")
+        f.write("-" * 75 + "\n")
+
+        for n in range(1, MAX_WORKERS + 1):
+            print(f"\n--- NUMBERED: {n} WORKER(S) ---")
+            reset_system()
+            scale_remote_workers(n)
+
+            start_time = time.time()
+            inject_workload(mode="numbered")
+            duration, m = wait_and_measure(start_time)
+
+            tp = WORKLOAD / duration
+            res = f"{n:7} | {duration:10.2f} | {tp:18.2f} | {m.get('success', 0):7} | {m.get('fail', 0):4}"
+            print(f"  {res}")
+            f.write(res + "\n")
+            f.flush()
+
+        # Limpieza final
         scale_remote_workers(0)
 
-    print(f"\n Test de Escalabilidad Distribuido completado.")
+    print(f"\n Test completado. Resultados en {file_path}")
 
 
 if __name__ == "__main__":
-    run_scalability_test()
+    run_benchmark()

@@ -4,6 +4,8 @@ import json
 import os
 import time
 
+from pika import PlainCredentials
+
 # Configuración
 r = redis.Redis(host='localhost', port=6379, decode_responses=True)
 WORKER_ID = os.getenv("WORKER_ID", "worker-mq-default")
@@ -57,7 +59,9 @@ def callback(ch, method, properties, body):
 
 
 def start_worker():
-    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+    credentials = PlainCredentials('admin', 'superpassword')
+    parameters = pika.ConnectionParameters('localhost', credentials=credentials)
+    connection = pika.BlockingConnection(parameters)
     channel = connection.channel()
 
     channel.queue_declare(queue='ticket_queue', durable=True)
