@@ -1,0 +1,11 @@
+C:\Users\Usuari\PycharmProjects\SD-PRAC-1\.venv\Scripts\python.exe C:\Users\Usuari\PycharmProjects\SD-PRAC-1\indirect_middleware\benchmark_PORTATIL.py
+Traceback (most recent call last):
+  File "C:\Users\Usuari\PycharmProjects\SD-PRAC-1\indirect_middleware\benchmark_PORTATIL.py", line 4, in <module>
+    import pika
+  File "C:\Users\Usuari\PycharmProjects\SD-PRAC-1\.venv\Lib\site-packages\pika\__init__.py", line 20, in <module>
+    from pika.adapters import BaseConnection
+  File "C:\Users\Usuari\PycharmProjects\SD-PRAC-1\.venv\Lib\site-packages\pika\adapters\__init__.py", line 24, in <module>
+    from .asyncore_connection import AsyncoreConnection
+  File "C:\Users\Usuari\PycharmProjects\SD-PRAC-1\.venv\Lib\site-packages\pika\adapters\asyncore_connection.py", line 5, in <module>
+    import asyncore
+ModuleNotFoundError: No module named 'asyncore'

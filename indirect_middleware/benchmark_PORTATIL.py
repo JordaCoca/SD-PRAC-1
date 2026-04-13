@@ -7,7 +7,7 @@ from datetime import datetime
 from pika import PlainCredentials
 
 # --- CONFIGURACIÓN DE RED ---
-TOWER_IP = "192.168.1.XX"  # <--- CAMBIA ESTO por la IP de tu torre
+TOWER_IP = "192.168.0.30"  # <--- CAMBIA ESTO por la IP de tu torre
 LB_URL = f"http://{TOWER_IP}:8080"
 RESULT_DIR = "resultados"
 QUEUE_NAME = 'ticket_queue'
