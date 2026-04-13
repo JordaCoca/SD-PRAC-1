@@ -7,7 +7,7 @@ from datetime import datetime
 from pika import PlainCredentials
 
 # --- CONFIGURACIÓN DE RED ---
-TOWER_IP = "ip"  # <--- IP
+TOWER_IP = "192.168.1.XX"  # <--- CAMBIA ESTO por la IP de tu torre
 LB_URL = f"http://{TOWER_IP}:8080"
 RESULT_DIR = "resultados"
 QUEUE_NAME = 'ticket_queue'
@@ -75,7 +75,7 @@ def inject_workload(mode="unnumbered"):
 
 
 def wait_and_measure(start_time):
-    """Consulta las métricas en la torre hasta que se procese everything"""
+    """Consulta las métricas en la torre hasta que se procese"""
     print("   [Wait] Procesando en la torre...")
     while True:
         try:
@@ -91,7 +91,7 @@ def wait_and_measure(start_time):
 
 def run_benchmark():
     fecha_hora = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    file_path = os.path.join(RESULT_DIR, f"dist_stress_mq_50k_PORTATIL.txt")
+    file_path = os.path.join(RESULT_DIR, f"dist_stress_mq_50k_{fecha_hora}.txt")
 
     print(f" Iniciando Benchmark Distribuido RabbitMQ (Portátil -> Torre) -> {file_path}")
 
