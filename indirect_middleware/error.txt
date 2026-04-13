@@ -4,8 +4,9 @@ Traceback (most recent call last):
     import pika
   File "C:\Users\Usuari\PycharmProjects\SD-PRAC-1\.venv\Lib\site-packages\pika\__init__.py", line 20, in <module>
     from pika.adapters import BaseConnection
-  File "C:\Users\Usuari\PycharmProjects\SD-PRAC-1\.venv\Lib\site-packages\pika\adapters\__init__.py", line 24, in <module>
-    from .asyncore_connection import AsyncoreConnection
-  File "C:\Users\Usuari\PycharmProjects\SD-PRAC-1\.venv\Lib\site-packages\pika\adapters\asyncore_connection.py", line 5, in <module>
-    import asyncore
-ModuleNotFoundError: No module named 'asyncore'
+  File "C:\Users\Usuari\PycharmProjects\SD-PRAC-1\.venv\Lib\site-packages\pika\adapters\__init__.py", line 43, in <module>
+    from pika.adapters.libev_connection import LibevConnection
+  File "C:\Users\Usuari\PycharmProjects\SD-PRAC-1\.venv\Lib\site-packages\pika\adapters\libev_connection.py", line 106
+    self.async = None
+         ^^^^^
+SyntaxError: invalid syntax
