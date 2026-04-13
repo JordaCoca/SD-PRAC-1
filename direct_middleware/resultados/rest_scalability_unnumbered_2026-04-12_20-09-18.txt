@@ -1,0 +1,7 @@
+--- BENCHMARK ESCALABILIDAD REST (UNNUMBERED) ---
+Fecha: 2026-04-12_20-09-18
+Workload: 15000 | Concurrency: 25
+
+Workers | Tiempo (s) | Throughput (msg/s) | Success | Fail
+---------------------------------------------------------------------------
+      1 |      60.98 |             245.97 |   15000 |    0
