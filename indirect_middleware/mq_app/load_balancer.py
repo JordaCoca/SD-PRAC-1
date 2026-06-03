@@ -56,7 +56,7 @@ async def scale_workers(num_workers: int):
 
     for i in range(num_workers):
         env = os.environ.copy()
-        env["WORKER_ID"] = f"remote-worker-{i + 1}"
+        env["WORKER_ID"] = f"mq-remote-worker-{i + 1}"
         p = subprocess.Popen([python_exe, worker_script], env=env)
         active_workers.append(p)
 

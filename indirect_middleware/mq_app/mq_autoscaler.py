@@ -20,16 +20,36 @@ workers = {}
 
 def get_queue_depth():
     try:
-        connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBIT_HOST))
+        credentials = pika.PlainCredentials('admin', 'superpassword')
+        parameters = pika.ConnectionParameters(
+            host=RABBIT_HOST,
+            credentials=credentials
+        )
+
+        connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
-        # IMPORTANTE: passive=False (por defecto) para que la cree si no existe
+
         queue = channel.queue_declare(queue=QUEUE_NAME, durable=True)
         count = queue.method.message_count
+
         connection.close()
         return count
+
     except Exception as e:
         print(f" Esperando a RabbitMQ... {e}")
         return 0
+
+# Función para no contar los workers muertos
+def cleanup_dead_workers():
+    dead_workers = []
+
+    for worker_id, proc in workers.items():
+        if proc.poll() is not None:
+            print(f" Worker MQ {worker_id} murió con código {proc.returncode}")
+            dead_workers.append(worker_id)
+
+    for worker_id in dead_workers:
+        del workers[worker_id]
 
 
 def start_worker(worker_id):
@@ -73,6 +93,8 @@ def monitor_and_scale():
     print(f"--- Autoscaler MQ iniciado (Min: {MIN_WORKERS}, Max: {MAX_WORKERS}) ---")
 
     while True:
+        cleanup_dead_workers()
+
         pending_messages = get_queue_depth()
         current_workers = len(workers)
 
