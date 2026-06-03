@@ -1,0 +1,6 @@
+--- BENCHMARK CONTENCIÓN REST (NUMBERED) ---
+Fecha: 2026-04-12_12-51-22
+Workers fijos: 4 | Workload: 10000 | Concurrency: 20
+
+Escenario | Modulo | Tiempo (s) | Throughput (msg/s) | Success | Fail
+--------------------------------------------------------------------------------

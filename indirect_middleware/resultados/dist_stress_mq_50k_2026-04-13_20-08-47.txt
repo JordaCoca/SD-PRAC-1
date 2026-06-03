@@ -1,0 +1,6 @@
+--- BENCHMARK DISTRIBUIDO MQ (50.000 PETS) ---
+Torre IP: 192.168.0.30
+
+FASE: UNNUMBERED
+Workers | Tiempo (s) | Throughput (msg/s) | Success | Fail
+---------------------------------------------------------------------------

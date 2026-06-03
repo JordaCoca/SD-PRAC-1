@@ -1,0 +1,6 @@
+--- BENCHMARK DISTRIBUIDO REST (PORTÁTIL -> TORRE) ---
+Fecha: 2026-04-13_19-37-13
+Workload: 20000 | Concurrency: 50
+
+Workers | Tiempo (s) | Throughput (msg/s) | Success | Fail
+---------------------------------------------------------------------------

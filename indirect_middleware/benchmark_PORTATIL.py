@@ -91,7 +91,7 @@ def wait_and_measure(start_time):
 
 def run_benchmark():
     fecha_hora = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    file_path = os.path.join(RESULT_DIR, f"dist_stress_mq_50k_{fecha_hora}.txt")
+    file_path = os.path.join(RESULT_DIR, f"dist_stress_mq_50k_PORTATIL.txt")
 
     print(f" Iniciando Benchmark Distribuido RabbitMQ (Portátil -> Torre) -> {file_path}")
 
