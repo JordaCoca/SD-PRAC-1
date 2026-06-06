@@ -6,6 +6,12 @@ import time
 
 from pika import PlainCredentials
 
+CONSISTENCY_MODE = os.getenv("CONSISTENCY_MODE", "optimistic")
+LOCK_WAIT_TIMEOUT = float(os.getenv("LOCK_WAIT_TIMEOUT", "0.05"))
+LOCK_RETRY_SLEEP = float(os.getenv("LOCK_RETRY_SLEEP", "0.001"))
+CRITICAL_SECTION_SLEEP = float(os.getenv("CRITICAL_SECTION_SLEEP", "0.003"))
+
+
 # Configuración
 r = redis.Redis(host='localhost', port=6379, decode_responses=True)
 WORKER_ID = os.getenv("WORKER_ID", "worker-mq-default")
@@ -28,18 +34,18 @@ def callback(ch, method, properties, body):
             if r.spop("available_seats"):
                 success = True
         else:  # --- MODELO NUMBERED ---
-            # Validamos que el asiento esté entre 1 y 20.000 (según enunciado)
             try:
                 s_id = int(seat_id)
+
                 if 1 <= s_id <= 20000:
-                    # SETNX intenta crear la llave; si ya existe, devuelve False
-                    if r.setnx(f"seat:{s_id}", client_id):
-                        success = True
+                    if CONSISTENCY_MODE == "pessimistic":
+                        success = sell_numbered_pessimistic(s_id, client_id)
+                    else:
+                        success = sell_numbered_optimistic(s_id, client_id)
                 else:
-                    # Asiento fuera de rango (ej: 25.000) -> Fallo
                     success = False
+
             except (ValueError, TypeError):
-                # Si el seat_id no es un número válido -> Fallo
                 success = False
 
         # 4. Registro de métricas finales (Éxito o Fallo)
@@ -57,6 +63,48 @@ def callback(ch, method, properties, body):
         # 5. SIEMPRE enviar el ACK para que el mensaje no se quede en "Unacked"
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
+def acquire_lock(lock_key, owner, timeout=0.05):
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        acquired = r.set(lock_key, owner, nx=True, ex=5)
+        if acquired:
+            return True
+
+        time.sleep(LOCK_RETRY_SLEEP)
+
+    return False
+
+
+def release_lock(lock_key, owner):
+    # Versión simple suficiente para la práctica local.
+    # Para producción real se usaría Lua para borrar solo si owner coincide.
+    if r.get(lock_key) == owner:
+        r.delete(lock_key)
+
+
+def sell_numbered_optimistic(s_id, client_id):
+    return r.setnx(f"seat:{s_id}", client_id)
+
+
+def sell_numbered_pessimistic(s_id, client_id):
+    lock_key = f"lock:seat:{s_id}"
+    owner = f"{WORKER_ID}:{client_id}:{s_id}"
+
+    got_lock = acquire_lock(lock_key, owner, timeout=LOCK_WAIT_TIMEOUT)
+
+    if not got_lock:
+        return False
+
+    try:
+        # Simula una sección crítica más larga: comprobación, transacción, escritura, etc.
+        # Esto es lo que hace visible la contención.
+        time.sleep(CRITICAL_SECTION_SLEEP)
+
+        return r.setnx(f"seat:{s_id}", client_id)
+
+    finally:
+        release_lock(lock_key, owner)
 
 def start_worker():
     credentials = PlainCredentials('admin', 'superpassword')

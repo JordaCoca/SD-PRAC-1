@@ -5,6 +5,7 @@ import time
 import pika
 from math import ceil
 
+
 # Configuración
 QUEUE_NAME = 'ticket_queue'
 RABBIT_HOST = 'localhost'
@@ -66,6 +67,10 @@ def start_worker(worker_id):
 
         # 3. Copiamos el entorno (Vital para el WinError 10106)
         env = os.environ.copy()
+        env["CONSISTENCY_MODE"] = os.getenv("CONSISTENCY_MODE", "optimistic")
+        env["CRITICAL_SECTION_SLEEP"] = os.getenv("CRITICAL_SECTION_SLEEP", "0.003")
+        env["LOCK_WAIT_TIMEOUT"] = os.getenv("LOCK_WAIT_TIMEOUT", "0.05")
+        env["LOCK_RETRY_SLEEP"] = os.getenv("LOCK_RETRY_SLEEP", "0.001")
         env["WORKER_ID"] = f"mq-{worker_id}"
 
         # 4. Lanzamos el proceso

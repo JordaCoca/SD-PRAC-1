@@ -1,137 +1,438 @@
 import os
 import sys
 import time
-import subprocess
-import requests
-import pika
 import json
+import random
+import subprocess
 from datetime import datetime
 
-# --- CONFIGURACIÓN ---
+import pika
+import requests
+
+
+# ============================================================
+# CONFIGURACIÓN GENERAL
+# ============================================================
+
 REST_URL = "http://127.0.0.1:8080"
 RESULT_DIR = "resultados"
-QUEUE_NAME = 'ticket_queue'
-MAX_WORKERS_SCALING = 8  # Para los tests de escalabilidad (Fase 1 y 2)
-FIXED_WORKERS_CONTENTION = 4  # Workers fijos para el test de contención (Fase 3)
-WORKLOAD = 50000
+
+QUEUE_NAME = "ticket_queue"
+RABBIT_HOST = "localhost"
+RABBIT_USER = "admin"
+RABBIT_PASS = "superpassword"
+
+TOTAL_SEATS = 20000
+WORKLOAD = 10000
+
+FIXED_WORKERS = 4
+
+# Modos de consistencia a comparar.
+# optimistic  -> SETNX directo
+# pessimistic -> lock por asiento + sección crítica
+CONSISTENCY_MODES = ["optimistic", "pessimistic"]
+
+# Parámetros del modo pesimista
+CRITICAL_SECTION_SLEEP = "0.005"
+LOCK_WAIT_TIMEOUT = "0.05"
+LOCK_RETRY_SLEEP = "0.001"
 
 os.makedirs(RESULT_DIR, exist_ok=True)
 
 
+# ============================================================
+# CONEXIONES
+# ============================================================
+
+def rabbit_connection():
+    credentials = pika.PlainCredentials(RABBIT_USER, RABBIT_PASS)
+    parameters = pika.ConnectionParameters(
+        host=RABBIT_HOST,
+        credentials=credentials
+    )
+    return pika.BlockingConnection(parameters)
+
+
 def reset_system():
     print("   [Reset] Limpiando Redis y RabbitMQ...")
-    requests.post(f"{REST_URL}/reset")
-    # RabbitMQ Purge
+
     try:
-        connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+        requests.post(f"{REST_URL}/reset", timeout=10)
+    except Exception as e:
+        print(f"   [WARN] Error llamando a /reset: {e}")
+
+    try:
+        connection = rabbit_connection()
         channel = connection.channel()
         channel.queue_declare(queue=QUEUE_NAME, durable=True)
         channel.queue_purge(queue=QUEUE_NAME)
         connection.close()
-    except:
-        pass
+    except Exception as e:
+        print(f"   [WARN] Error purgando RabbitMQ: {e}")
+
     time.sleep(2)
 
 
-def start_workers(num_workers):
-    print(f"   [System] Iniciando {num_workers} worker(s) MQ...")
+def get_metrics():
+    try:
+        return requests.get(f"{REST_URL}/metrics", timeout=5).json()
+    except Exception as e:
+        print(f"   [WARN] Error leyendo métricas: {e}")
+        return {
+            "received": 0,
+            "processed": 0,
+            "success": 0,
+            "fail": 0,
+            "active_workers": 0
+        }
+
+
+def get_queue_depth():
+    try:
+        connection = rabbit_connection()
+        channel = connection.channel()
+        q = channel.queue_declare(queue=QUEUE_NAME, durable=True)
+        count = q.method.message_count
+        connection.close()
+        return count
+    except Exception:
+        return -1
+
+
+# ============================================================
+# WORKERS
+# ============================================================
+
+def start_workers(num_workers, consistency_mode):
+    print(f"   [Workers] Iniciando {num_workers} workers en modo {consistency_mode}...")
+
     procesos = []
+
     base_path = os.path.dirname(os.path.abspath(__file__))
-    # Ajusta esta ruta según tu estructura (donde esté mq_worker.py)
     worker_script = os.path.join(base_path, "mq_app", "mq_worker.py")
+
+    if not os.path.exists(worker_script):
+        # Por si ejecutas este benchmark desde dentro de mq_app
+        worker_script = os.path.join(base_path, "mq_worker.py")
+
     python_exe = sys.executable
+
     for i in range(num_workers):
         env = os.environ.copy()
-        env["WORKER_ID"] = f"mq-bench-{i + 1}"
-        p = subprocess.Popen([python_exe, worker_script], env=env)
+
+        env["WORKER_ID"] = f"mq-contention-{consistency_mode}-{i + 1}"
+        env["CONSISTENCY_MODE"] = consistency_mode
+        env["CRITICAL_SECTION_SLEEP"] = CRITICAL_SECTION_SLEEP
+        env["LOCK_WAIT_TIMEOUT"] = LOCK_WAIT_TIMEOUT
+        env["LOCK_RETRY_SLEEP"] = LOCK_RETRY_SLEEP
+
+        p = subprocess.Popen(
+            [python_exe, worker_script],
+            env=env
+        )
+
         procesos.append(p)
+
     time.sleep(2)
     return procesos
 
 
 def stop_workers(procesos):
+    print("   [Workers] Deteniendo workers...")
+
     for p in procesos:
-        p.terminate()
-        p.wait()
+        try:
+            p.terminate()
+        except Exception:
+            pass
+
+    for p in procesos:
+        try:
+            p.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            p.kill()
 
 
-def inject_workload(num_seats=None):
+# ============================================================
+# GENERADORES DE ASIENTOS
+# ============================================================
+
+def seat_normal(i):
     """
-    num_seats = None -> Unnumbered
-    num_seats = int  -> Numbered con ese rango de asientos
+    Caso numbered normal.
+    Reparte peticiones entre los 20.000 asientos.
+    Con WORKLOAD=10000, casi todas deberían ser success.
     """
-    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
+    return (i % TOTAL_SEATS) + 1
+
+
+def seat_uniform_limited(i, num_seats):
+    """
+    Contención uniforme sobre un subconjunto pequeño de asientos.
+    Ejemplo: 200 asientos o 20 asientos.
+    """
+    return (i % num_seats) + 1
+
+
+def seat_hotspot_80_5():
+    """
+    Hotspot exacto del enunciado:
+    80% de peticiones van al 5% de asientos.
+
+    5% de 20.000 = 1.000 asientos calientes.
+    """
+    hot_seats = int(TOTAL_SEATS * 0.05)  # 1000
+
+    if random.random() < 0.80:
+        return random.randint(1, hot_seats)
+    else:
+        return random.randint(hot_seats + 1, TOTAL_SEATS)
+
+
+# ============================================================
+# INYECCIÓN DE WORKLOAD
+# ============================================================
+
+def inject_workload(scenario_name):
+    connection = rabbit_connection()
     channel = connection.channel()
     channel.queue_declare(queue=QUEUE_NAME, durable=True)
 
-    mode_str = "unnumbered" if num_seats is None else f"numbered ({num_seats} seats)"
-    print(f"   [Inject] Enviando {WORKLOAD} peticiones ({mode_str})...")
+    print(f"   [Inject] Enviando {WORKLOAD} peticiones: {scenario_name}")
+
+    start = time.time()
 
     for i in range(WORKLOAD):
-        if num_seats is None:
-            seat_id = None
-        else:
-            seat_id = (i % num_seats) + 1
+        if scenario_name == "normal_20000":
+            seat_id = seat_normal(i)
 
-        message = {"client_id": f"c_{i}", "seat_id": seat_id, "request_id": f"req_{i}"}
+        elif scenario_name == "hotspot_80_5":
+            seat_id = seat_hotspot_80_5()
+
+        elif scenario_name == "limited_2000":
+            seat_id = seat_uniform_limited(i, 2000)
+
+        elif scenario_name == "limited_200":
+            seat_id = seat_uniform_limited(i, 200)
+
+        elif scenario_name == "limited_20":
+            seat_id = seat_uniform_limited(i, 20)
+
+        else:
+            raise ValueError(f"Escenario desconocido: {scenario_name}")
+
+        message = {
+            "client_id": f"c_{i}",
+            "seat_id": seat_id,
+            "request_id": f"req_{scenario_name}_{i}"
+        }
+
         channel.basic_publish(
-            exchange='', routing_key=QUEUE_NAME,
-            body=json.dumps(message), properties=pika.BasicProperties(delivery_mode=2)
+            exchange="",
+            routing_key=QUEUE_NAME,
+            body=json.dumps(message),
+            properties=pika.BasicProperties(delivery_mode=2)
         )
+
     connection.close()
 
+    elapsed = time.time() - start
+    print(f"   [Inject] Envío terminado en {elapsed:.2f}s")
 
-def wait_and_measure(start_time):
+
+# ============================================================
+# MEDICIÓN
+# ============================================================
+
+def wait_until_processed(expected_messages, timeout=180):
+    start = time.time()
+
     while True:
-        try:
-            resp = requests.get(f"{REST_URL}/metrics").json()
-            if resp.get("processed", 0) >= WORKLOAD:
-                return time.time() - start_time, resp
-        except:
-            pass
+        metrics = get_metrics()
+        processed = metrics.get("processed", 0)
+        queue_depth = get_queue_depth()
+
+        print(
+            f"   [Wait] processed={processed}/{expected_messages} | "
+            f"success={metrics.get('success', 0)} | "
+            f"fail={metrics.get('fail', 0)} | "
+            f"queue={queue_depth}"
+        )
+
+        if processed >= expected_messages:
+            return time.time() - start, metrics
+
+        if time.time() - start > timeout:
+            print("   [WARN] Timeout esperando procesamiento.")
+            return time.time() - start, metrics
+
         time.sleep(0.5)
 
 
+def validate_numbered_result(metrics):
+    """
+    Validación básica para numbered:
+    success nunca puede superar TOTAL_SEATS.
+    """
+    success = metrics.get("success", 0)
+    fail = metrics.get("fail", 0)
+    processed = metrics.get("processed", 0)
+
+    ok = True
+    notes = []
+
+    if success > TOTAL_SEATS:
+        ok = False
+        notes.append("ERROR: success > 20000, posible overselling.")
+
+    if success + fail < processed:
+        notes.append("WARN: success + fail menor que processed, posible desfase de métricas.")
+
+    if not notes:
+        notes.append("OK")
+
+    return ok, " ".join(notes)
+
+
+# ============================================================
+# BENCHMARK
+# ============================================================
+
+def run_single_case(consistency_mode, scenario_name):
+    reset_system()
+
+    workers = start_workers(FIXED_WORKERS, consistency_mode)
+
+    try:
+        start_total = time.time()
+
+        inject_workload(scenario_name)
+
+        duration_wait, metrics = wait_until_processed(WORKLOAD)
+
+        total_duration = time.time() - start_total
+        throughput = WORKLOAD / total_duration if total_duration > 0 else 0
+
+        ok, validation_msg = validate_numbered_result(metrics)
+
+        result = {
+            "consistency_mode": consistency_mode,
+            "scenario": scenario_name,
+            "workers": FIXED_WORKERS,
+            "workload": WORKLOAD,
+            "total_time_s": total_duration,
+            "throughput_msg_s": throughput,
+            "success": metrics.get("success", 0),
+            "fail": metrics.get("fail", 0),
+            "processed": metrics.get("processed", 0),
+            "valid": ok,
+            "validation": validation_msg
+        }
+
+        return result
+
+    finally:
+        stop_workers(workers)
+        time.sleep(2)
+
+
 def run_benchmark():
-    fecha_hora = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    file_path = os.path.join(RESULT_DIR, f"full_benchmark_{fecha_hora}.txt")
+    fecha = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    file_path = os.path.join(RESULT_DIR, f"contention_benchmark_{fecha}.txt")
+    csv_path = os.path.join(RESULT_DIR, f"contention_benchmark_{fecha}.csv")
 
-    with open(file_path, "w") as f:
-        f.write(f"--- BENCHMARK INTEGRAL (RABBITMQ) ---\n")
-        f.write(f"Fecha: {fecha_hora} | Workload: {WORKLOAD}\n\n")
+    scenarios = [
+        "normal_20000",
+        "hotspot_80_5",
+        "limited_2000",
+        "limited_200",
+        "limited_20",
+    ]
 
-        # --- FASE 1: ESCALABILIDAD (Variable: Workers, Fijo: Asientos) ---
-        f.write("FASE 1: ESCALABILIDAD UNNUMBERED\n")
-        f.write("Workers | Tiempo (s) | Throughput (msg/s) | Success | Fail\n" + "-" * 70 + "\n")
-        for n in range(1, MAX_WORKERS_SCALING + 1):
-            reset_system()
-            w_procs = start_workers(n)
-            start_t = time.time()
-            inject_workload(num_seats=None)
-            duration, m = wait_and_measure(start_t)
-            stop_workers(w_procs)
-            res = f"{n:7} | {duration:10.2f} | {WORKLOAD / duration:18.2f} | {m.get('success', 0):7} | {m.get('fail', 0):4}"
-            f.write(res + "\n")
-            f.flush()
+    all_results = []
 
-        # --- FASE 2: CONTENCIÓN (Variable: Asientos, Fijo: Workers) ---
-        f.write("\nFASE 2: ANALISIS DE CONTENCION (Workers fijos: {})\n".format(FIXED_WORKERS_CONTENTION))
-        f.write("Asientos | Tiempo (s) | Throughput (msg/s) | Success | Fail\n" + "-" * 70 + "\n")
+    print("================================================")
+    print("BENCHMARK DE CONTENCIÓN RABBITMQ + REDIS")
+    print("================================================")
+    print(f"Workload: {WORKLOAD}")
+    print(f"Workers fijos: {FIXED_WORKERS}")
+    print(f"Modos: {CONSISTENCY_MODES}")
+    print(f"Resultados: {file_path}")
+    print("================================================")
 
-        escenarios_asientos = [20000, 2000, 200, 20]
-        for s in escenarios_asientos:
-            print(f"\n--- CONTENCION: {s} ASIENTOS CON {FIXED_WORKERS_CONTENTION} WORKERS ---")
-            reset_system()
-            w_procs = start_workers(FIXED_WORKERS_CONTENTION)
-            start_t = time.time()
-            inject_workload(num_seats=s)
-            duration, m = wait_and_measure(start_t)
-            stop_workers(w_procs)
-            res = f"{s:8} | {duration:10.2f} | {WORKLOAD / duration:18.2f} | {m.get('success', 0):7} | {m.get('fail', 0):4}"
-            f.write(res + "\n")
-            f.flush()
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write("--- BENCHMARK DE CONTENCION RABBITMQ + REDIS ---\n")
+        f.write(f"Fecha: {fecha}\n")
+        f.write(f"Workload: {WORKLOAD}\n")
+        f.write(f"Workers fijos: {FIXED_WORKERS}\n")
+        f.write(f"Critical section sleep: {CRITICAL_SECTION_SLEEP}\n")
+        f.write(f"Lock wait timeout: {LOCK_WAIT_TIMEOUT}\n")
+        f.write(f"Lock retry sleep: {LOCK_RETRY_SLEEP}\n\n")
 
-    print(f"\nBenchmark completado. Resultados en {file_path}")
+        header = (
+            f"{'Mode':14} | {'Scenario':15} | {'Time(s)':>10} | "
+            f"{'Throughput':>12} | {'Success':>7} | {'Fail':>7} | "
+            f"{'Processed':>9} | {'Valid':>5} | Validation\n"
+        )
+
+        f.write(header)
+        f.write("-" * 120 + "\n")
+
+        print(header.strip())
+        print("-" * 120)
+
+        for mode in CONSISTENCY_MODES:
+            for scenario in scenarios:
+                print(f"\n>>> Ejecutando mode={mode}, scenario={scenario}")
+
+                result = run_single_case(mode, scenario)
+                all_results.append(result)
+
+                line = (
+                    f"{result['consistency_mode']:14} | "
+                    f"{result['scenario']:15} | "
+                    f"{result['total_time_s']:10.2f} | "
+                    f"{result['throughput_msg_s']:12.2f} | "
+                    f"{result['success']:7} | "
+                    f"{result['fail']:7} | "
+                    f"{result['processed']:9} | "
+                    f"{str(result['valid']):>5} | "
+                    f"{result['validation']}\n"
+                )
+
+                f.write(line)
+                f.flush()
+
+                print(line.strip())
+
+    # CSV simple para gráficas
+    with open(csv_path, "w", encoding="utf-8") as f:
+        f.write(
+            "mode,scenario,workers,workload,total_time_s,throughput_msg_s,"
+            "success,fail,processed,valid,validation\n"
+        )
+
+        for r in all_results:
+            f.write(
+                f"{r['consistency_mode']},"
+                f"{r['scenario']},"
+                f"{r['workers']},"
+                f"{r['workload']},"
+                f"{r['total_time_s']:.4f},"
+                f"{r['throughput_msg_s']:.4f},"
+                f"{r['success']},"
+                f"{r['fail']},"
+                f"{r['processed']},"
+                f"{r['valid']},"
+                f"\"{r['validation']}\"\n"
+            )
+
+    print("\n================================================")
+    print("BENCHMARK COMPLETADO")
+    print("================================================")
+    print(f"TXT: {file_path}")
+    print(f"CSV: {csv_path}")
+    print("================================================")
 
 
 if __name__ == "__main__":
