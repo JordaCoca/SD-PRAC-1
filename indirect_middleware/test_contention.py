@@ -23,18 +23,22 @@ RABBIT_USER = "admin"
 RABBIT_PASS = "superpassword"
 
 TOTAL_SEATS = 20000
-WORKLOAD = 10000
+WORKLOAD = 20000
+FIXED_WORKERS = 12
 
-FIXED_WORKERS = 4
+# Estos nombres son IMPORTANTES:
+# normal  -> usa mq_worker.py
+# hotspot -> usa mq_worker_hotspot.py
+WORKER_TYPES = ["normal", "hotspot"]
 
-# Modos de consistencia a comparar.
-# optimistic  -> SETNX directo
-# pessimistic -> lock por asiento + sección crítica
-CONSISTENCY_MODES = ["optimistic", "pessimistic"]
+MODE_LABELS = {
+    "normal": "optimistic_setnx",
+    "hotspot": "pessimistic_lock"
+}
 
-# Parámetros del modo pesimista
+# Parámetros para mq_worker_hotspot.py
 CRITICAL_SECTION_SLEEP = "0.005"
-LOCK_WAIT_TIMEOUT = "0.05"
+LOCK_WAIT_TIMEOUT = "0.3"
 LOCK_RETRY_SLEEP = "0.001"
 
 os.makedirs(RESULT_DIR, exist_ok=True)
@@ -103,28 +107,58 @@ def get_queue_depth():
 # WORKERS
 # ============================================================
 
-def start_workers(num_workers, consistency_mode):
-    print(f"   [Workers] Iniciando {num_workers} workers en modo {consistency_mode}...")
+def resolve_worker_script(worker_type):
+    """
+    Busca el worker tanto si ejecutas el benchmark desde la raíz
+    como si lo ejecutas desde dentro de mq_app.
+    """
+    base_path = os.path.dirname(os.path.abspath(__file__))
+
+    if worker_type == "hotspot":
+        candidates = [
+            os.path.join(base_path, "mq_app", "mq_worker_hotspot.py"),
+            os.path.join(base_path, "mq_worker_hotspot.py"),
+        ]
+    else:
+        candidates = [
+            os.path.join(base_path, "mq_app", "mq_worker.py"),
+            os.path.join(base_path, "mq_worker.py"),
+        ]
+
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+
+    raise FileNotFoundError(
+        f"No se ha encontrado el worker para tipo={worker_type}. "
+        f"Buscado en: {candidates}"
+    )
+
+
+def start_workers(num_workers, worker_type):
+    label = MODE_LABELS.get(worker_type, worker_type)
+    print(f"   [Workers] Iniciando {num_workers} workers tipo {label}...")
 
     procesos = []
-
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    worker_script = os.path.join(base_path, "mq_app", "mq_worker.py")
-
-    if not os.path.exists(worker_script):
-        # Por si ejecutas este benchmark desde dentro de mq_app
-        worker_script = os.path.join(base_path, "mq_worker.py")
-
+    worker_script = resolve_worker_script(worker_type)
     python_exe = sys.executable
+
+    print(f"   [Workers] Script usado: {worker_script}")
 
     for i in range(num_workers):
         env = os.environ.copy()
 
-        env["WORKER_ID"] = f"mq-contention-{consistency_mode}-{i + 1}"
-        env["CONSISTENCY_MODE"] = consistency_mode
+        env["WORKER_ID"] = f"mq-{worker_type}-{i + 1}"
+
+        # Solo mq_worker_hotspot.py usa estos valores, pero no molesta pasarlos siempre.
         env["CRITICAL_SECTION_SLEEP"] = CRITICAL_SECTION_SLEEP
         env["LOCK_WAIT_TIMEOUT"] = LOCK_WAIT_TIMEOUT
         env["LOCK_RETRY_SLEEP"] = LOCK_RETRY_SLEEP
+
+        env["RABBIT_HOST"] = RABBIT_HOST
+        env["RABBIT_USER"] = RABBIT_USER
+        env["RABBIT_PASS"] = RABBIT_PASS
+        env["QUEUE_NAME"] = QUEUE_NAME
 
         p = subprocess.Popen(
             [python_exe, worker_script],
@@ -159,25 +193,23 @@ def stop_workers(procesos):
 
 def seat_normal(i):
     """
-    Caso numbered normal.
-    Reparte peticiones entre los 20.000 asientos.
-    Con WORKLOAD=10000, casi todas deberían ser success.
+    Caso normal:
+    reparte las peticiones entre los 20.000 asientos.
     """
     return (i % TOTAL_SEATS) + 1
 
 
 def seat_uniform_limited(i, num_seats):
     """
-    Contención uniforme sobre un subconjunto pequeño de asientos.
-    Ejemplo: 200 asientos o 20 asientos.
+    Contención uniforme sobre pocos asientos.
     """
     return (i % num_seats) + 1
 
 
 def seat_hotspot_80_5():
     """
-    Hotspot exacto del enunciado:
-    80% de peticiones van al 5% de asientos.
+    Hotspot del enunciado:
+    80% de peticiones van al 5% de los asientos.
 
     5% de 20.000 = 1.000 asientos calientes.
     """
@@ -250,12 +282,14 @@ def wait_until_processed(expected_messages, timeout=180):
     while True:
         metrics = get_metrics()
         processed = metrics.get("processed", 0)
+        success = metrics.get("success", 0)
+        fail = metrics.get("fail", 0)
         queue_depth = get_queue_depth()
 
         print(
             f"   [Wait] processed={processed}/{expected_messages} | "
-            f"success={metrics.get('success', 0)} | "
-            f"fail={metrics.get('fail', 0)} | "
+            f"success={success} | "
+            f"fail={fail} | "
             f"queue={queue_depth}"
         )
 
@@ -270,10 +304,6 @@ def wait_until_processed(expected_messages, timeout=180):
 
 
 def validate_numbered_result(metrics):
-    """
-    Validación básica para numbered:
-    success nunca puede superar TOTAL_SEATS.
-    """
     success = metrics.get("success", 0)
     fail = metrics.get("fail", 0)
     processed = metrics.get("processed", 0)
@@ -298,25 +328,26 @@ def validate_numbered_result(metrics):
 # BENCHMARK
 # ============================================================
 
-def run_single_case(consistency_mode, scenario_name):
+def run_single_case(worker_type, scenario_name):
     reset_system()
 
-    workers = start_workers(FIXED_WORKERS, consistency_mode)
+    workers = start_workers(FIXED_WORKERS, worker_type)
 
     try:
         start_total = time.time()
 
         inject_workload(scenario_name)
 
-        duration_wait, metrics = wait_until_processed(WORKLOAD)
+        _, metrics = wait_until_processed(WORKLOAD)
 
         total_duration = time.time() - start_total
         throughput = WORKLOAD / total_duration if total_duration > 0 else 0
 
         ok, validation_msg = validate_numbered_result(metrics)
 
-        result = {
-            "consistency_mode": consistency_mode,
+        return {
+            "worker_type": worker_type,
+            "mode_label": MODE_LABELS.get(worker_type, worker_type),
             "scenario": scenario_name,
             "workers": FIXED_WORKERS,
             "workload": WORKLOAD,
@@ -328,8 +359,6 @@ def run_single_case(consistency_mode, scenario_name):
             "valid": ok,
             "validation": validation_msg
         }
-
-        return result
 
     finally:
         stop_workers(workers)
@@ -356,8 +385,12 @@ def run_benchmark():
     print("================================================")
     print(f"Workload: {WORKLOAD}")
     print(f"Workers fijos: {FIXED_WORKERS}")
-    print(f"Modos: {CONSISTENCY_MODES}")
-    print(f"Resultados: {file_path}")
+    print(f"Worker types: {WORKER_TYPES}")
+    print(f"Critical section sleep: {CRITICAL_SECTION_SLEEP}")
+    print(f"Lock wait timeout: {LOCK_WAIT_TIMEOUT}")
+    print(f"Lock retry sleep: {LOCK_RETRY_SLEEP}")
+    print(f"Resultados TXT: {file_path}")
+    print(f"Resultados CSV: {csv_path}")
     print("================================================")
 
     with open(file_path, "w", encoding="utf-8") as f:
@@ -365,31 +398,32 @@ def run_benchmark():
         f.write(f"Fecha: {fecha}\n")
         f.write(f"Workload: {WORKLOAD}\n")
         f.write(f"Workers fijos: {FIXED_WORKERS}\n")
+        f.write(f"Worker types: {WORKER_TYPES}\n")
         f.write(f"Critical section sleep: {CRITICAL_SECTION_SLEEP}\n")
         f.write(f"Lock wait timeout: {LOCK_WAIT_TIMEOUT}\n")
         f.write(f"Lock retry sleep: {LOCK_RETRY_SLEEP}\n\n")
 
         header = (
-            f"{'Mode':14} | {'Scenario':15} | {'Time(s)':>10} | "
+            f"{'Mode':18} | {'Scenario':15} | {'Time(s)':>10} | "
             f"{'Throughput':>12} | {'Success':>7} | {'Fail':>7} | "
             f"{'Processed':>9} | {'Valid':>5} | Validation\n"
         )
 
         f.write(header)
-        f.write("-" * 120 + "\n")
+        f.write("-" * 125 + "\n")
 
         print(header.strip())
-        print("-" * 120)
+        print("-" * 125)
 
-        for mode in CONSISTENCY_MODES:
+        for worker_type in WORKER_TYPES:
             for scenario in scenarios:
-                print(f"\n>>> Ejecutando mode={mode}, scenario={scenario}")
+                print(f"\n>>> Ejecutando mode={MODE_LABELS[worker_type]}, scenario={scenario}")
 
-                result = run_single_case(mode, scenario)
+                result = run_single_case(worker_type, scenario)
                 all_results.append(result)
 
                 line = (
-                    f"{result['consistency_mode']:14} | "
+                    f"{result['mode_label']:18} | "
                     f"{result['scenario']:15} | "
                     f"{result['total_time_s']:10.2f} | "
                     f"{result['throughput_msg_s']:12.2f} | "
@@ -405,16 +439,16 @@ def run_benchmark():
 
                 print(line.strip())
 
-    # CSV simple para gráficas
     with open(csv_path, "w", encoding="utf-8") as f:
         f.write(
-            "mode,scenario,workers,workload,total_time_s,throughput_msg_s,"
-            "success,fail,processed,valid,validation\n"
+            "mode,worker_type,scenario,workers,workload,total_time_s,"
+            "throughput_msg_s,success,fail,processed,valid,validation\n"
         )
 
         for r in all_results:
             f.write(
-                f"{r['consistency_mode']},"
+                f"{r['mode_label']},"
+                f"{r['worker_type']},"
                 f"{r['scenario']},"
                 f"{r['workers']},"
                 f"{r['workload']},"
