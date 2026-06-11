@@ -1,0 +1,8 @@
+phase,workload,mode,max_queue_seen,max_expected_workers_seen,max_actual_workers_seen,processed_in_phase,final_queue,final_consumers,reached_expected,drained
+idle_initial,0,unnumbered,0,1,1,0,0,1,True,True
+small_load_expect_1_worker,200,unnumbered,167,1,1,200,0,1,True,True
+medium_load_expect_2_workers,600,unnumbered,516,2,1,600,0,1,True,True
+medium_load_expect_3_workers,1200,unnumbered,1106,3,3,1201,0,1,True,True
+high_load_expect_5_workers,2500,unnumbered,2350,5,4,2500,0,3,True,True
+very_high_load_expect_9_workers,4500,unnumbered,4090,9,8,4500,0,7,True,True
+cap_test_expect_10_workers,8000,unnumbered,6491,10,10,8000,0,8,True,True
