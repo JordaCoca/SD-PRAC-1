@@ -1,0 +1,26 @@
+SUPER STRESS TEST - DIRECT REST
+LB_URL=http://100.81.42.52:8080
+TOTAL_SEATS=20000
+CLIENT_THREADS=32
+
+{
+  "test": "throughput_vs_workers_unnumbered",
+  "workers": 8,
+  "requests": 20000,
+  "elapsed_s": 70.5157,
+  "throughput_req_s": 283.6247,
+  "success": 20000,
+  "fail": 0,
+  "http_error": 0,
+  "unique_sold_seats": 0,
+  "duplicate_success_seats": 0,
+  "latency_avg_ms": 112.7041,
+  "latency_p50_ms": 109.7817,
+  "latency_p95_ms": 172.0679,
+  "latency_p99_ms": 234.2693,
+  "valid": true,
+  "notes": "OK",
+  "expected_success": 20000,
+  "expected_fail": 0
+}
+

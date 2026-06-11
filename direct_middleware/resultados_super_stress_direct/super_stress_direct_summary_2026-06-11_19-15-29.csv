@@ -1,0 +1,2 @@
+test,workers,requests,elapsed_s,throughput_req_s,success,fail,http_error,unique_sold_seats,duplicate_success_seats,latency_avg_ms,latency_p50_ms,latency_p95_ms,latency_p99_ms,valid,notes,expected_success,expected_fail
+throughput_vs_workers_unnumbered,8,20000,80.6283,248.052,20000,0,0,0,0,257.6665,252.3363,445.9929,522.7366,True,OK,20000,0
