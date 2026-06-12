@@ -1,0 +1,521 @@
+MANUAL - EJECUCIÓN DE BENCHMARKS EN FORMATO BUY DEL ENUNCIADO
+=================================================================
+
+Este manual explica cómo ejecutar el script send_buy_benchmark.py, que permite lanzar
+peticiones en el formato textual del enunciado:
+
+    BUY <client_id> <seat_id> <request_id>      (numbered seats)
+    BUY <client_id> <request_id>                (unnumbered seats)
+
+El script convierte cada línea BUY a la representación JSON usada internamente por el
+sistema y la envía a la arquitectura directa REST o a la arquitectura indirecta RabbitMQ.
+
+
+1. FORMATO DE LOS FICHEROS DE ENTRADA
+=====================================
+
+1.1. Numbered seats
+-------------------
+
+Formato:
+
+    BUY <client_id> <seat_id> <request_id>
+
+Ejemplo:
+
+    # Concert Ticket Benchmark – Numbered Seats
+    # Seats: 1..20000
+    # Format: BUY <client_id> <seat_id> <request_id>
+
+    BUY user00001 42 00001
+    BUY user00002 42 00002
+    BUY user00003 42 00003
+    BUY user00004 42 00004
+
+El script lo transforma internamente en mensajes JSON equivalentes:
+
+    {
+      "client_id": "user00001",
+      "seat_id": 42,
+      "request_id": "00001"
+    }
+
+
+1.2. Unnumbered seats
+---------------------
+
+Formato:
+
+    BUY <client_id> <request_id>
+
+Ejemplo:
+
+    # Concert Ticket Benchmark – Unnumbered Seats
+    # Total tickets: 20000
+    # Format: BUY <client_id> <request_id>
+
+    BUY user00001 00001
+    BUY user00002 00002
+    BUY user00003 00003
+    BUY user00004 00004
+
+El script lo transforma internamente en mensajes JSON equivalentes:
+
+    {
+      "client_id": "user00001",
+      "seat_id": null,
+      "request_id": "00001"
+    }
+
+En este caso seat_id es null porque el cliente no elige un asiento concreto. El sistema
+asigna una entrada disponible del inventario general.
+
+
+2. REQUISITOS PREVIOS
+=====================
+
+2.1. En la torre / servidor
+---------------------------
+
+Antes de ejecutar los tests desde la VM cliente, en la torre deben estar activos Redis,
+RabbitMQ y el load balancer correspondiente.
+
+Para arquitectura directa REST:
+
+    cd direct_middleware
+    docker start redis-server
+    python -m uvicorn rest_app.load_balancer:app --host 0.0.0.0 --port 8080
+
+Para arquitectura indirecta RabbitMQ:
+
+    cd indirect_middleware/mq_app
+    docker start redis-server
+    docker start rabbitmq-server
+    python -m uvicorn load_balancer:app --host 0.0.0.0 --port 8080
+
+Si se va a usar la arquitectura indirecta sin autoscaler, el propio script puede pedir al
+load balancer que arranque un número fijo de workers usando --scale N.
+
+Si se va a usar la arquitectura indirecta con autoscaler, no se debe usar --scale. En ese
+caso hay que arrancar el autoscaler en otra terminal de la torre:
+
+    cd indirect_middleware/mq_app
+    python mq_autoscaler.py
+
+
+2.2. En la VM cliente
+---------------------
+
+Entrar en la carpeta del proyecto y activar el entorno virtual:
+
+    cd ~/benchmark
+    source .venv/bin/activate
+
+Instalar dependencias si no están instaladas:
+
+    pip install requests pika
+
+Si el script se ha copiado a indirect_middleware o direct_middleware, entrar en la carpeta
+donde esté el script. Por ejemplo:
+
+    cd ~/benchmark/indirecto
+
+Comprobar conectividad con el load balancer:
+
+    curl http://100.81.42.52:8080/metrics
+
+Comprobar conectividad con RabbitMQ, solo para indirecta:
+
+    python - <<'PY'
+    import pika
+    credentials = pika.PlainCredentials("admin", "superpassword")
+    params = pika.ConnectionParameters("100.81.42.52", 5672, "/", credentials)
+    conn = pika.BlockingConnection(params)
+    conn.close()
+    print("RabbitMQ OK")
+    PY
+
+
+3. USO GENERAL DEL SCRIPT
+=========================
+
+El script se llama:
+
+    send_buy_benchmark.py
+
+Parámetros principales:
+
+    --input FICHERO
+        Fichero de texto con líneas BUY.
+
+    --type numbered | unnumbered
+        Tipo de benchmark.
+
+    --mode direct | indirect
+        Arquitectura a la que enviar las peticiones.
+
+    --url http://IP:8080
+        URL del load balancer REST. Se usa tanto en directa como para reset/metrics en
+        indirecta.
+
+    --rabbit-host IP
+        IP del servidor RabbitMQ. Solo se usa en modo indirect.
+
+    --reset
+        Llama a /reset antes de enviar peticiones. Borra Redis y limpia la cola RabbitMQ.
+
+    --scale N
+        Llama a /scale?num_workers=N antes de enviar peticiones. Útil para tests sin
+        autoscaler.
+
+    --wait
+        En modo indirect, espera a que /metrics indique que se han procesado todos los
+        mensajes publicados.
+
+Ejemplo de ayuda:
+
+    python send_buy_benchmark.py --help
+
+
+4. EJECUCIÓN EN ARQUITECTURA DIRECTA REST
+=========================================
+
+En directa, las peticiones se envían por HTTP al endpoint /buy del load balancer. La
+operación BUY queda implícita en el endpoint.
+
+
+4.1. Directa - numbered seats
+-----------------------------
+
+Ejemplo:
+
+    python send_buy_benchmark.py \
+      --input benchmark_numbered.txt \
+      --type numbered \
+      --mode direct \
+      --url http://100.81.42.52:8080 \
+      --reset \
+      --scale 8
+
+Qué hace:
+
+    1. Llama a /reset.
+    2. Arranca 8 workers REST usando /scale?num_workers=8.
+    3. Lee cada línea BUY del fichero.
+    4. Envía cada petición como JSON a /buy.
+    5. Muestra success, fail, http_error, tiempo total y throughput.
+
+
+4.2. Directa - unnumbered seats
+-------------------------------
+
+Ejemplo:
+
+    python send_buy_benchmark.py \
+      --input benchmark_unnumbered.txt \
+      --type unnumbered \
+      --mode direct \
+      --url http://100.81.42.52:8080 \
+      --reset \
+      --scale 8
+
+Qué hace:
+
+    1. Llama a /reset.
+    2. Arranca 8 workers REST.
+    3. Lee el fichero en formato BUY <client_id> <request_id>.
+    4. Envía cada compra como JSON con seat_id = null.
+    5. Muestra el resultado final.
+
+
+5. EJECUCIÓN EN ARQUITECTURA INDIRECTA RABBITMQ SIN AUTOSCALER
+==============================================================
+
+En indirecta, las peticiones se publican como mensajes JSON en RabbitMQ. Los workers MQ
+consumen la cola ticket_queue y actualizan Redis. El script puede esperar a que /metrics
+indique que todos los mensajes han sido procesados.
+
+
+5.1. Indirecta - numbered seats
+-------------------------------
+
+Ejemplo:
+
+    python send_buy_benchmark.py \
+      --input benchmark_numbered.txt \
+      --type numbered \
+      --mode indirect \
+      --rabbit-host 100.81.42.52 \
+      --url http://100.81.42.52:8080 \
+      --reset \
+      --scale 8 \
+      --wait
+
+Qué hace:
+
+    1. Llama a /reset.
+    2. Arranca 8 workers MQ mediante /scale?num_workers=8.
+    3. Publica cada línea BUY como mensaje JSON en RabbitMQ.
+    4. Espera a que /metrics indique processed = número de mensajes enviados.
+    5. Muestra las métricas finales del sistema.
+
+
+5.2. Indirecta - unnumbered seats
+---------------------------------
+
+Ejemplo:
+
+    python send_buy_benchmark.py \
+      --input benchmark_unnumbered.txt \
+      --type unnumbered \
+      --mode indirect \
+      --rabbit-host 100.81.42.52 \
+      --url http://100.81.42.52:8080 \
+      --reset \
+      --scale 8 \
+      --wait
+
+Qué hace:
+
+    1. Llama a /reset.
+    2. Arranca 8 workers MQ.
+    3. Publica mensajes con seat_id = null.
+    4. Los workers asignan entradas desde el inventario general.
+    5. Espera a que se procesen todos los mensajes.
+
+
+6. EJECUCIÓN EN ARQUITECTURA INDIRECTA RABBITMQ CON AUTOSCALER
+==============================================================
+
+Si se quiere usar el autoscaler, no se debe usar --scale, porque los workers los controla
+mq_autoscaler.py.
+
+Primero, en la torre:
+
+    cd indirect_middleware/mq_app
+    python mq_autoscaler.py
+
+Después, desde la VM cliente:
+
+Numbered:
+
+    python send_buy_benchmark.py \
+      --input benchmark_numbered.txt \
+      --type numbered \
+      --mode indirect \
+      --rabbit-host 100.81.42.52 \
+      --url http://100.81.42.52:8080 \
+      --reset \
+      --wait
+
+Unnumbered:
+
+    python send_buy_benchmark.py \
+      --input benchmark_unnumbered.txt \
+      --type unnumbered \
+      --mode indirect \
+      --rabbit-host 100.81.42.52 \
+      --url http://100.81.42.52:8080 \
+      --reset \
+      --wait
+
+En este caso:
+
+    - El script publica los mensajes en RabbitMQ.
+    - El autoscaler observa el tamaño de la cola.
+    - El autoscaler arranca o detiene workers según la carga.
+    - El script espera a que /metrics indique que se han procesado todos los mensajes.
+
+
+7. EJEMPLOS DE FICHEROS DE PRUEBA
+=================================
+
+7.1. Crear benchmark_numbered.txt
+---------------------------------
+
+Ejemplo simple con todos los clientes compitiendo por el mismo asiento 42:
+
+    cat > benchmark_numbered.txt <<'EOF'
+    # Concert Ticket Benchmark – Numbered Seats
+    # Seats: 1..20000
+    # Format: BUY <client_id> <seat_id> <request_id>
+
+    BUY user00001 42 00001
+    BUY user00002 42 00002
+    BUY user00003 42 00003
+    BUY user00004 42 00004
+    BUY user00005 42 00005
+    BUY user00006 42 00006
+    BUY user00007 42 00007
+    BUY user00008 42 00008
+    BUY user00009 42 00009
+    BUY user00010 42 00010
+    EOF
+
+Resultado esperado:
+
+    - Solo una petición puede vender el asiento 42.
+    - El resto deben fallar.
+    - No debe haber duplicados.
+
+
+7.2. Crear benchmark_unnumbered.txt
+-----------------------------------
+
+Ejemplo simple de compras unnumbered:
+
+    cat > benchmark_unnumbered.txt <<'EOF'
+    # Concert Ticket Benchmark – Unnumbered Seats
+    # Total tickets: 20000
+    # Format: BUY <client_id> <request_id>
+
+    BUY user00001 00001
+    BUY user00002 00002
+    BUY user00003 00003
+    BUY user00004 00004
+    BUY user00005 00005
+    BUY user00006 00006
+    BUY user00007 00007
+    BUY user00008 00008
+    BUY user00009 00009
+    BUY user00010 00010
+    EOF
+
+Resultado esperado:
+
+    - Si hay inventario disponible, todas estas peticiones deberían tener éxito.
+    - Si se envían más de 20000 peticiones, solo 20000 deberían tener éxito.
+    - El resto deben fallar sin overselling.
+
+
+8. INTERPRETACIÓN DE RESULTADOS
+===============================
+
+8.1. Numbered seats
+-------------------
+
+En un benchmark numbered donde muchas peticiones piden el mismo asiento:
+
+    BUY user00001 42 00001
+    BUY user00002 42 00002
+    BUY user00003 42 00003
+
+El resultado correcto es:
+
+    - success = 1
+    - fail = número_de_peticiones - 1
+    - duplicados = 0
+
+Esto demuestra que el sistema no vende dos veces el mismo asiento.
+
+
+8.2. Unnumbered seats
+---------------------
+
+En un benchmark unnumbered con N peticiones:
+
+    - Si N <= 20000:
+        success = N
+        fail = 0
+
+    - Si N > 20000:
+        success = 20000
+        fail = N - 20000
+
+Esto demuestra que el sistema no vende más entradas de las disponibles.
+
+
+8.3. Directa vs indirecta
+-------------------------
+
+Directa REST:
+
+    Cliente -> Load Balancer REST -> Worker REST -> Redis
+
+Indirecta RabbitMQ:
+
+    Cliente -> RabbitMQ -> Worker MQ -> Redis
+
+El formato BUY es el mismo a nivel semántico. La diferencia está en el transporte:
+
+    - En directa se envía como petición HTTP JSON.
+    - En indirecta se publica como mensaje JSON en RabbitMQ.
+
+
+9. PROBLEMAS FRECUENTES
+=======================
+
+9.1. ModuleNotFoundError: No module named 'pika'
+-----------------------------------------------
+
+Activar el entorno virtual e instalar dependencias:
+
+    source ~/benchmark/.venv/bin/activate
+    pip install pika requests
+
+
+9.2. No se procesan mensajes en indirecta
+-----------------------------------------
+
+Comprobar que hay workers MQ activos.
+
+Si no se usa autoscaler:
+
+    curl -X POST "http://100.81.42.52:8080/scale?num_workers=8"
+
+Si se usa autoscaler:
+
+    python mq_autoscaler.py
+
+Comprobar métricas:
+
+    curl http://100.81.42.52:8080/metrics
+
+
+9.3. RabbitMQ rechaza la conexión
+---------------------------------
+
+Comprobar que RabbitMQ está arrancado en la torre:
+
+    docker start rabbitmq-server
+
+Comprobar credenciales:
+
+    usuario: admin
+    password: superpassword
+
+
+9.4. El script marca errores HTTP en directa
+--------------------------------------------
+
+Comprobar que el load balancer directo está arrancado y que el endpoint /buy existe:
+
+    curl http://100.81.42.52:8080/metrics
+
+
+10. RESUMEN RÁPIDO DE COMANDOS
+==============================
+
+Directa numbered:
+
+    python send_buy_benchmark.py --input benchmark_numbered.txt --type numbered --mode direct --url http://100.81.42.52:8080 --reset --scale 8
+
+Directa unnumbered:
+
+    python send_buy_benchmark.py --input benchmark_unnumbered.txt --type unnumbered --mode direct --url http://100.81.42.52:8080 --reset --scale 8
+
+Indirecta numbered sin autoscaler:
+
+    python send_buy_benchmark.py --input benchmark_numbered.txt --type numbered --mode indirect --rabbit-host 100.81.42.52 --url http://100.81.42.52:8080 --reset --scale 8 --wait
+
+Indirecta unnumbered sin autoscaler:
+
+    python send_buy_benchmark.py --input benchmark_unnumbered.txt --type unnumbered --mode indirect --rabbit-host 100.81.42.52 --url http://100.81.42.52:8080 --reset --scale 8 --wait
+
+Indirecta numbered con autoscaler:
+
+    python send_buy_benchmark.py --input benchmark_numbered.txt --type numbered --mode indirect --rabbit-host 100.81.42.52 --url http://100.81.42.52:8080 --reset --wait
+
+Indirecta unnumbered con autoscaler:
+
+    python send_buy_benchmark.py --input benchmark_unnumbered.txt --type unnumbered --mode indirect --rabbit-host 100.81.42.52 --url http://100.81.42.52:8080 --reset --wait
