@@ -1,0 +1,141 @@
+MANUAL DE EJECUCION - ARQUITECTURA DIRECTA REST
+=================================================
+
+Objetivo
+--------
+Ejecutar los tests de la arquitectura directa usando la VM AWS como cliente y la torre como servidor.
+La comunicacion entre ambas maquinas se hace por Tailscale.
+
+IP Tailscale de la torre usada en las pruebas:
+  100.81.42.52
+
+Estructura esperada
+-------------------
+En la torre deben estar los ficheros de la aplicacion directa, por ejemplo:
+  main.py
+  load_balancer.py
+  autoscaler.py
+
+En la VM deben estar los scripts de benchmark, por ejemplo:
+  super_stress_test_rest_dual_mode.py
+  direct_autoscaler_realistic_benchmark.py
+
+Si en tu proyecto tienen otro nombre, usa el equivalente que contenga los mismos tests.
+
+1. Arrancar servicios en la torre
+---------------------------------
+Abrir una terminal en la torre y arrancar Redis:
+
+  docker start redis-server
+
+Si no existe el contenedor, crearlo:
+
+  docker run -d --name redis-server -p 6379:6379 redis
+
+Arrancar el load balancer directo desde la carpeta donde esten los ficheros directos:
+
+  python -m uvicorn load_balancer:app --host 0.0.0.0 --port 8080
+
+Comprobar desde la VM que responde:
+
+  curl http://100.81.42.52:8080/metrics
+
+2. Preparar la VM cliente
+-------------------------
+Entrar en la VM y activar el entorno virtual:
+
+  cd ~/benchmark/directo
+  source ~/benchmark/.venv/bin/activate
+
+Instalar dependencias si hace falta:
+
+  pip install requests
+
+Comprobar conectividad:
+
+  curl http://100.81.42.52:8080/metrics
+
+3. Test directo sin autoscaler
+------------------------------
+Antes de ejecutar, revisar que dentro del script la IP del servidor sea:
+
+  SERVER_IP = "100.81.42.52"
+
+Ejecutar el benchmark principal:
+
+  python super_stress_test_rest_dual_mode.py
+
+Este benchmark debe incluir, como minimo:
+  - unnumbered_no_overselling
+  - numbered_mod_1000_req_100_seats
+  - throughput_vs_workers en modo optimized
+  - throughput_vs_workers en modo realistic
+  - contention_normal_20000
+  - contention_hotspot_80_5
+  - contention_limited_100
+  - contention_limited_20
+  - contention_single_seat
+
+Resultados esperados de correctitud:
+  - Unnumbered: 25.000 peticiones -> 20.000 success y 5.000 fail.
+  - Numbered: 1.000 peticiones sobre 100 asientos -> 100 success y 900 fail.
+  - duplicate_success_seats debe ser 0.
+  - http_error debe ser 0.
+
+Los resultados se guardan normalmente en:
+
+  resultados_super_stress_direct/
+
+4. Test directo con autoscaler
+------------------------------
+Para probar el autoscaler directo, primero arrancar la version del servidor que permite escalar workers automaticamente.
+No se deben arrancar workers manualmente al mismo tiempo que el autoscaler.
+
+Desde la VM, ejecutar:
+
+  python direct_autoscaler_realistic_benchmark.py
+
+Este test genera fases como:
+  - idle_initial_expect_scale_down
+  - high_load_expect_4_workers
+  - idle_after_high_expect_1_or_0
+  - small_load_expect_2_workers
+  - idle_final_expect_1_or_0
+
+Resultados esperados:
+  - En idle debe mantenerse cerca del minimo de workers.
+  - En carga alta debe subir el numero de workers.
+  - Al terminar la carga debe desescalar progresivamente.
+  - http_error debe ser 0.
+
+Los resultados se guardan normalmente en:
+
+  resultados_direct_autoscaler/
+
+5. Exportar resultados directos
+-------------------------------
+Desde la VM:
+
+  cd ~/benchmark/directo
+  tar -czvf resultados_directo.tgz resultados_super_stress_direct resultados_direct_autoscaler
+
+Desde el PC local, usando PowerShell:
+
+  scp -i "C:\ruta\a\tu_clave.pem" ubuntu@IP_PUBLICA_AWS:~/benchmark/directo/resultados_directo.tgz .
+
+Sustituir IP_PUBLICA_AWS por la IP publica real de la VM.
+
+6. Problemas comunes
+--------------------
+Si curl a /metrics no responde:
+  - Comprobar que uvicorn esta arrancado en la torre con --host 0.0.0.0.
+  - Comprobar que Tailscale esta activo en ambas maquinas.
+  - Comprobar que la IP es 100.81.42.52.
+
+Si hay http_error:
+  - Reducir la carga inicial para hacer una prueba pequena.
+  - Revisar logs del load balancer y workers.
+
+Si el throughput no escala:
+  - Puede ser normal en modo optimized si el cuello de botella esta en HTTP, Tailscale, Redis o la VM cliente.
+  - Usar el modo realistic para ver mejor el efecto de aumentar workers.

@@ -1,0 +1,173 @@
+MANUAL DE EJECUCION - ARQUITECTURA INDIRECTA RABBITMQ
+=====================================================
+
+Objetivo
+--------
+Ejecutar los tests de la arquitectura indirecta usando la VM AWS como cliente y la torre como servidor.
+La VM publica mensajes en RabbitMQ y los workers MQ en la torre consumen esos mensajes y actualizan Redis.
+
+IP Tailscale de la torre usada en las pruebas:
+  100.81.42.52
+
+Estructura esperada
+-------------------
+En la torre deben estar los ficheros de la arquitectura indirecta, por ejemplo:
+  load_balancer.py
+  mq_worker.py
+  mq_worker_hotspot.py
+  mq_autoscaler.py
+
+En la VM deben estar los scripts de benchmark, por ejemplo:
+  indirect_benchmark_no_autoscaler.py
+  benchmark_autoscaler.py
+
+1. Arrancar servicios en la torre
+---------------------------------
+Arrancar Redis:
+
+  docker start redis-server
+
+Si no existe el contenedor:
+
+  docker run -d --name redis-server -p 6379:6379 redis
+
+Arrancar RabbitMQ:
+
+  docker start rabbitmq-server
+
+Si no existe el contenedor:
+
+  docker run -d --name rabbitmq-server \
+    -p 5672:5672 -p 15672:15672 \
+    -e RABBITMQ_DEFAULT_USER=admin \
+    -e RABBITMQ_DEFAULT_PASS=superpassword \
+    rabbitmq:3-management
+
+Arrancar el load balancer indirecto desde la carpeta de la arquitectura indirecta:
+
+  python -m uvicorn load_balancer:app --host 0.0.0.0 --port 8080
+
+Comprobar desde la VM:
+
+  curl http://100.81.42.52:8080/metrics
+
+Comprobar RabbitMQ desde la VM:
+
+  python - <<'PY'
+import pika
+credentials = pika.PlainCredentials("admin", "superpassword")
+params = pika.ConnectionParameters("100.81.42.52", 5672, "/", credentials)
+conn = pika.BlockingConnection(params)
+conn.close()
+print("RabbitMQ OK")
+PY
+
+2. Preparar la VM cliente
+-------------------------
+Entrar en la carpeta de benchmarks indirectos:
+
+  cd ~/benchmark/indirecto
+  source ~/benchmark/.venv/bin/activate
+
+Instalar dependencias:
+
+  pip install pika requests redis
+
+3. Test indirecto sin autoscaler
+--------------------------------
+Importante: no arrancar mq_autoscaler.py durante este test.
+El propio benchmark usa el endpoint /scale para fijar manualmente el numero de workers.
+
+Ejecutar benchmark completo:
+
+  python indirect_benchmark_no_autoscaler.py --tower-ip 100.81.42.52 --scale-requests 50000
+
+Tests incluidos:
+  - unnumbered_no_overselling
+  - numbered_mod_1000_req_100_seats
+  - throughput_vs_workers_unnumbered con 1,2,3,4,8,16 workers
+  - contention_normal_20000
+  - contention_hotspot_80_5
+  - contention_limited_100
+  - contention_limited_20
+  - contention_single_seat
+
+Resultados esperados de correctitud:
+  - Unnumbered: 25.000 mensajes -> 20.000 success y 5.000 fail.
+  - Numbered: 1.000 mensajes sobre 100 asientos -> 100 success y 900 fail.
+  - En contencion no debe haber duplicate_success_seats.
+
+Nota sobre throughput_vs_workers_unnumbered:
+  - Se envian 50.000 mensajes, pero solo hay 20.000 entradas.
+  - Por tanto el resultado correcto es 20.000 success y 30.000 fail.
+  - Si el script antiguo marca FAIL por esperar 50.000 success, es un falso negativo de la validacion, no un error del sistema.
+
+Los resultados se guardan normalmente en:
+
+  resultados_indirect_no_autoscaler/
+
+4. Test indirecto con autoscaler
+--------------------------------
+Primero arrancar el autoscaler en una segunda terminal de la torre:
+
+  python mq_autoscaler.py
+
+No usar /scale manualmente mientras el autoscaler este activo.
+
+En la VM ejecutar:
+
+  python benchmark_autoscaler.py --large 30000 --medium 8000 --small 3000
+
+Este benchmark hace:
+  - Pausa inicial.
+  - Rafaga grande de 30.000 mensajes.
+  - Pausa para observar desescalado.
+  - Rafaga mediana de 8.000 mensajes.
+  - Pausa.
+  - Rafaga pequena de 3.000 mensajes.
+  - Pausa final.
+
+Resultados esperados:
+  - En idle debe haber 1 consumer.
+  - En large_burst debe llegar cerca o exactamente al maximo configurado, por ejemplo 16 consumers.
+  - En medium_burst debe aparecer un pico intermedio, por ejemplo alrededor de 13 consumers.
+  - En small_burst debe aparecer un pico bajo, por ejemplo alrededor de 5 consumers.
+  - En las pausas debe bajar progresivamente hasta 1 consumer.
+
+Los resultados se guardan normalmente en:
+
+  resultados_indirect_autoscaler/
+
+5. Exportar resultados indirectos
+---------------------------------
+Desde la VM:
+
+  cd ~/benchmark/indirecto
+  tar -czvf resultados_indirecto.tgz resultados_indirect_no_autoscaler resultados_indirect_autoscaler
+
+Desde el PC local, usando PowerShell:
+
+  scp -i "C:\ruta\a\tu_clave.pem" ubuntu@IP_PUBLICA_AWS:~/benchmark/indirecto/resultados_indirecto.tgz .
+
+Sustituir IP_PUBLICA_AWS por la IP publica real de la VM.
+
+6. Problemas comunes
+--------------------
+Si RabbitMQ no conecta:
+  - Comprobar que el contenedor rabbitmq-server esta arrancado.
+  - Comprobar que usa usuario admin y password superpassword.
+  - Comprobar que el puerto 5672 es accesible por Tailscale.
+
+Si consumers=0:
+  - En test sin autoscaler, comprobar que /scale?num_workers=N funciona.
+  - En test con autoscaler, comprobar que mq_autoscaler.py esta arrancado en la torre.
+
+Si el autoscaler no llega al maximo esperado:
+  - Reiniciar mq_autoscaler.py despues de cambiar MAX_WORKERS.
+  - Aumentar la rafaga grande, por ejemplo --large 50000.
+  - Recordar que el benchmark mide la cola en instantes concretos; si el sistema drena muy rapido, el pico real puede ocurrir entre muestras.
+
+Si expected es menor que consumers:
+  - Es normal. expected se calcula en el momento de la muestra con la cola restante.
+  - El autoscaler pudo decidir arrancar mas workers unos instantes antes, cuando la cola era mayor.
+  - Luego desescala poco a poco por cooldown.
