@@ -9,7 +9,7 @@ from math import ceil
 QUEUE_NAME = 'ticket_queue'
 RABBIT_HOST = 'localhost'
 MIN_WORKERS = 1
-MAX_WORKERS = 10
+MAX_WORKERS = 16
 CHECK_INTERVAL = 0.5
 SCALE_DOWN_COOLDOWN = 1.5
 
