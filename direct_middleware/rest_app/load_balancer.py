@@ -102,18 +102,17 @@ async def proxy_buy(req: Request):
         return {"status": "FAIL", "reason": "no workers"}
 
     data = await req.json()
-    worker = next(worker_cycle)
 
     # Intentar hasta 3 veces con workers distintos si uno falla
-    for _ in range(3):
+    for _ in range(min(3, len(workers))):
         worker = next(worker_cycle)
         try:
-            # Bajamos un poco el timeout para no hacer esperar al cliente, le aumento el margen d reintento
             r = await client.post(f"{worker}/buy", json=data, timeout=5.0)
             return r.json()
         except (httpx.ConnectError, httpx.TimeoutException):
-            print(f" Worker {worker} falló. Reintentando con otro...")
+            print(f"Worker {worker} falló. Reintentando con otro...")
             continue
+
     return {"status": "FAIL", "reason": "all workers failed"}
 
 
@@ -121,7 +120,7 @@ async def proxy_buy(req: Request):
 def get_metrics():
     # Obtenemos todas las llaves de métricas
     keys = r_db.keys("metrics:*")
-    stats = {"received": 0, "processed": 0, "success": 0, "fail": 0}
+    stats = {"received": 0, "processed": 0, "success": 0, "fail": 0, "pending": 0, "active_workers": len(workers), "workers": workers}
 
     for k in keys:
         try:
@@ -140,7 +139,7 @@ def get_metrics():
                 stats["processed"] += v
         except Exception as e:
             continue
-
+    stats["pending"] = max(0, stats["received"] - stats["processed"])
     return stats
 
 
