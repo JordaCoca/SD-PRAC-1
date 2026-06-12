@@ -25,8 +25,12 @@ def update_cycle():
 
 # Para escalar más facilmente
 @app.post("/scale")
-async def scale_rest(num_workers: int):
+async def scale_rest(num_workers: int, mode: str = "optimized", delay_ms: float = 20.0):
     global active_processes, workers, worker_cycle
+
+    mode = mode.lower()
+    if mode not in ("optimized", "realistic", "realista"):
+        return {"status": "FAIL", "reason": "mode must be optimized or realistic"}
 
     # 1. Limpieza (Igual que antes)
     for p in active_processes:
@@ -47,6 +51,8 @@ async def scale_rest(num_workers: int):
 
         env = os.environ.copy()
         env["WORKER_ID"] = f"worker-{port}"
+        env["WORKER_MODE"] = mode
+        env["REALISTIC_DELAY_MS"] = str(delay_ms)
 
         cmd = [sys.executable, "-m", "uvicorn", "rest_app.main:app",
                "--port", str(port), "--host", "127.0.0.1"]
@@ -55,9 +61,14 @@ async def scale_rest(num_workers: int):
         active_processes.append(p)
 
     update_cycle()  # Refrescamos el iterador para el Round Robin
-    print(f"Sistema escalado a {num_workers} workers: {workers}")
+    print(f"Sistema escalado a {num_workers} workers en modo {mode} (delay={delay_ms} ms): {workers}")
 
-    return {"status": "scaled", "active_workers": workers}
+    return {
+        "status": "scaled",
+        "mode": mode,
+        "delay_ms": delay_ms if mode in ("realistic", "realista") else 0,
+        "active_workers": workers
+    }
 
 @app.post("/register")
 def register(data: dict):

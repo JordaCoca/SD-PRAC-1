@@ -26,6 +26,24 @@ ALPHA = 0.3  # smoothing EMA
 # RETOCAR CON LA IP DE LA TORRE/OTRA MAQUINA
 LB_URL = "http://127.0.0.1:8080"
 
+# Modo de los workers lanzados por el autoscaler.
+# Por defecto es optimized; usa:
+#   python -m rest_app.autoscaler --realistic
+# o:
+#   python -m rest_app.autoscaler --mode realistic --delay-ms 20
+import argparse
+
+parser = argparse.ArgumentParser(description="Autoscaler REST")
+parser.add_argument("--mode", choices=["optimized", "realistic"], default=os.getenv("WORKER_MODE", "optimized"))
+parser.add_argument("--realistic", action="store_true", help="Alias de --mode realistic")
+parser.add_argument("--delay-ms", type=float, default=float(os.getenv("REALISTIC_DELAY_MS", "20")))
+args = parser.parse_args()
+
+WORKER_MODE = "realistic" if args.realistic else args.mode
+REALISTIC_DELAY_MS = args.delay_ms
+os.environ["WORKER_MODE"] = WORKER_MODE
+os.environ["REALISTIC_DELAY_MS"] = str(REALISTIC_DELAY_MS)
+
 last_scale_down_time = time.time()
 smoothed_rps = 0
 
@@ -36,6 +54,8 @@ def start_worker(i):
     port = BASE_PORT + i
     env = os.environ.copy()
     env["WORKER_ID"] = f"worker{i}"
+    env["WORKER_MODE"] = WORKER_MODE
+    env["REALISTIC_DELAY_MS"] = str(REALISTIC_DELAY_MS)
 
     p = subprocess.Popen(
         ["uvicorn", "rest_app.main:app", "--port", str(port), "--log-level", "warning", "--timeout-keep-alive", "5"],
@@ -44,7 +64,7 @@ def start_worker(i):
 
     workers[i] = {"proc": p, "port": port}
 
-    print(f"Started worker {i}")
+    print(f"Started worker {i} in mode={WORKER_MODE}, delay={REALISTIC_DELAY_MS if WORKER_MODE == 'realistic' else 0} ms")
     time.sleep(0.3)
 
     try:

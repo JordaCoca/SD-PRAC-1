@@ -12,6 +12,12 @@ r = redis.Redis(host="localhost", port=6379, decode_responses=True)
 MAX_SEATS = 20000
 WORKER_ID = os.getenv("WORKER_ID", "worker-unknown")
 
+# Modos de ejecución del worker:
+# - optimized: comportamiento original, sin retardo artificial.
+# - realistic: simula lógica de negocio/BD añadiendo un delay por compra.
+WORKER_MODE = os.getenv("WORKER_MODE", "optimized").lower()
+REALISTIC_DELAY_MS = float(os.getenv("REALISTIC_DELAY_MS", "20"))
+
 
 class BuyRequest(BaseModel):
     client_id: str
@@ -24,6 +30,11 @@ def buy(req: BuyRequest):
     # 1. Registro de entrada
     r.incr(f"metrics:{WORKER_ID}:requests_received")
     success = False
+
+    # Modo realista: simula trabajo de negocio por petición.
+    # Por defecto son 20 ms, configurable con REALISTIC_DELAY_MS.
+    if WORKER_MODE in ("realistic", "realista"):
+        time.sleep(REALISTIC_DELAY_MS / 1000.0)
 
     # --- CASO A: ASIENTO NO NUMERADO (UNNUMBERED) ---
     if req.seat_id is None:
@@ -75,6 +86,15 @@ def buy(req: BuyRequest):
     return {"status": "SUCCESS" if success else "FAIL"}
 
 
+@app.get("/mode")
+def mode():
+    return {
+        "worker_id": WORKER_ID,
+        "mode": WORKER_MODE,
+        "realistic_delay_ms": REALISTIC_DELAY_MS if WORKER_MODE in ("realistic", "realista") else 0
+    }
+
+
 @app.post("/reset")
 def reset():
     r.flushall()
@@ -98,3 +118,27 @@ def metrics():
         result[k] = int(r.get(k))
 
     return result
+
+# Permite levantar un worker directamente con flag, por ejemplo:
+#   python -m rest_app.main --port 8001
+#   python -m rest_app.main --port 8001 --realistic
+#   python -m rest_app.main --port 8001 --mode realistic --delay-ms 20
+if __name__ == "__main__":
+    import argparse
+    import uvicorn
+
+    parser = argparse.ArgumentParser(description="Ticket worker REST")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8001)
+    parser.add_argument("--mode", choices=["optimized", "realistic"], default=os.getenv("WORKER_MODE", "optimized"))
+    parser.add_argument("--realistic", action="store_true", help="Alias de --mode realistic")
+    parser.add_argument("--delay-ms", type=float, default=None, help="Delay del modo realistic en milisegundos")
+    args = parser.parse_args()
+
+    selected_mode = "realistic" if args.realistic else args.mode
+    os.environ["WORKER_MODE"] = selected_mode
+
+    if args.delay_ms is not None:
+        os.environ["REALISTIC_DELAY_MS"] = str(args.delay_ms)
+
+    uvicorn.run("rest_app.main:app", host=args.host, port=args.port)

@@ -5,16 +5,16 @@ SUPER STRESS TEST - Arquitectura directa REST
 Tests:
 1) Unnumbered no overselling.
 2) Numbered duplicados controlados: 1000 requests sobre 100 asientos -> 100 SUCCESS y 900 FAIL.
-3) Throughput según workers: 1 vs 2 vs 4 vs 8 vs 16.
+3) Throughput según workers: 1 vs 2 vs 4 vs 8 vs 16, primero optimized y luego realistic.
 4) Contención/hotspot.
 
 Uso:
-    python super_stress_test_rest_stable.py
+    python super_stress_test_rest_dual_mode.py
 
 Desde portátil contra PC:
     PowerShell:
         $env:LB_URL="http://IP_DEL_PC:8080"
-        python super_stress_test_rest_stable.py
+        python super_stress_test_rest_dual_mode.py
 """
 
 import argparse
@@ -88,14 +88,20 @@ def reset_system():
     time.sleep(1.0)
 
 
-def scale_workers(num_workers):
-    print(f"Escalando a {num_workers} workers...")
+def scale_workers(num_workers, worker_mode="optimized", delay_ms=20):
+    print(f"Escalando a {num_workers} workers... mode={worker_mode}, delay_ms={delay_ms}")
 
     last_error = None
 
+    params = {"num_workers": num_workers}
+    if worker_mode:
+        params["mode"] = worker_mode
+    if worker_mode == "realistic":
+        params["delay_ms"] = delay_ms
+
     for attempt in range(1, 6):
         try:
-            r = get_session().post(f"{LB_URL}/scale", params={"num_workers": num_workers}, timeout=60)
+            r = get_session().post(f"{LB_URL}/scale", params=params, timeout=60)
             r.raise_for_status()
             data = r.json()
             time.sleep(3.0)
@@ -105,7 +111,7 @@ def scale_workers(num_workers):
             print(f"   /scale falló intento {attempt}/5: {e}")
             time.sleep(5.0)
 
-    raise RuntimeError(f"No se pudo escalar a {num_workers} workers. Último error: {last_error}")
+    raise RuntimeError(f"No se pudo escalar a {num_workers} workers en modo {worker_mode}. Último error: {last_error}")
 
 
 def buy(client_id, request_id, seat_id):
@@ -248,12 +254,12 @@ def analyze_results(results):
     }
 
 
-def run_workload(name, workload_items, workers, client_threads, save_details=False):
+def run_workload(name, workload_items, workers, client_threads, worker_mode="optimized", delay_ms=0, save_details=False):
     items = list(workload_items)
     total = len(items)
 
     print(f"\n--- Ejecutando {name} ---")
-    print(f"Workers={workers}, requests={total}, client_threads={client_threads}")
+    print(f"Workers={workers}, requests={total}, client_threads={client_threads}, worker_mode={worker_mode}, delay_ms={delay_ms}")
 
     start = time.time()
     results = []
@@ -281,6 +287,8 @@ def run_workload(name, workload_items, workers, client_threads, save_details=Fal
     row = {
         "test": name,
         "workers": workers,
+        "worker_mode": worker_mode,
+        "delay_ms": delay_ms,
         "requests": total,
         "elapsed_s": round(elapsed_s, 4),
         "throughput_req_s": round(throughput, 4),
@@ -391,35 +399,48 @@ def test_numbered_mod_duplicates(workers, requests_count, seats_count, client_th
     return row
 
 
-def test_throughput_vs_workers(worker_counts, requests_count, client_threads):
+def test_throughput_vs_workers(worker_counts, requests_count, client_threads, realistic_delay_ms=20):
     print("\n================================================")
     print("TEST 3 - THROUGHPUT VS WORKERS")
+    print("Modo optimized primero, modo realistic después")
     print("================================================")
 
     rows = []
 
-    for workers in worker_counts:
-        scale_workers(workers)
-        reset_system()
+    scenarios = [
+        ("optimized", 0),
+        ("realistic", realistic_delay_ms),
+    ]
 
-        row = run_workload(
-            "throughput_vs_workers_unnumbered",
-            workload_unnumbered(requests_count),
-            workers,
-            client_threads,
-        )
+    for worker_mode, delay_ms in scenarios:
+        print("\n------------------------------------------------")
+        print(f"THROUGHPUT MODE={worker_mode.upper()} DELAY={delay_ms}ms")
+        print("------------------------------------------------")
 
-        expected_success = min(TOTAL_SEATS, requests_count)
-        expected_fail = max(0, requests_count - TOTAL_SEATS)
+        for workers in worker_counts:
+            scale_workers(workers, worker_mode=worker_mode, delay_ms=delay_ms)
+            reset_system()
 
-        row["expected_success"] = expected_success
-        row["expected_fail"] = expected_fail
+            row = run_workload(
+                f"throughput_vs_workers_unnumbered_{worker_mode}",
+                workload_unnumbered(requests_count),
+                workers,
+                client_threads,
+                worker_mode=worker_mode,
+                delay_ms=delay_ms,
+            )
 
-        if row["success"] != expected_success or row["fail"] != expected_fail:
-            row["valid"] = False
-            row["notes"] = "ERROR: unexpected success/fail count"
+            expected_success = min(TOTAL_SEATS, requests_count)
+            expected_fail = max(0, requests_count - TOTAL_SEATS)
 
-        rows.append(row)
+            row["expected_success"] = expected_success
+            row["expected_fail"] = expected_fail
+
+            if row["success"] != expected_success or row["fail"] != expected_fail:
+                row["valid"] = False
+                row["notes"] = "ERROR: unexpected success/fail count"
+
+            rows.append(row)
 
     return rows
 
@@ -521,6 +542,8 @@ def print_summary(rows):
         print(
             f"[{status}] {row['test']} | "
             f"workers={row['workers']} | "
+            f"mode={row.get('worker_mode', 'optimized')} | "
+            f"delay={row.get('delay_ms', 0)}ms | "
             f"req={row['requests']} | "
             f"thr={row['throughput_req_s']} req/s | "
             f"success={row['success']} | "
@@ -547,8 +570,9 @@ def main():
     parser.add_argument("--unnumbered-requests", type=int, default=25000)
     parser.add_argument("--duplicate-requests", type=int, default=1000)
     parser.add_argument("--duplicate-seats", type=int, default=100)
-    parser.add_argument("--throughput-requests", type=int, default=20000)
+    parser.add_argument("--throughput-requests", type=int, default=5000)
     parser.add_argument("--contention-requests", type=int, default=20000)
+    parser.add_argument("--realistic-delay-ms", type=int, default=20)
 
     args = parser.parse_args()
 
@@ -592,6 +616,7 @@ def main():
                 worker_counts=worker_counts,
                 requests_count=args.throughput_requests,
                 client_threads=client_threads,
+                realistic_delay_ms=args.realistic_delay_ms,
             )
         )
 
