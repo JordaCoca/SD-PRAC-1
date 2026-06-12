@@ -18,6 +18,10 @@ WORKER_ID = os.getenv("WORKER_ID", "worker-unknown")
 WORKER_MODE = os.getenv("WORKER_MODE", "optimized").lower()
 REALISTIC_DELAY_MS = float(os.getenv("REALISTIC_DELAY_MS", "20"))
 
+def busy_wait_ms(ms: float):
+    end = time.perf_counter() + (ms / 1000.0)
+    while time.perf_counter() < end:
+        pass
 
 class BuyRequest(BaseModel):
     client_id: str
@@ -34,7 +38,7 @@ def buy(req: BuyRequest):
     # Modo realista: simula trabajo de negocio por petición.
     # Por defecto son 20 ms, configurable con REALISTIC_DELAY_MS.
     if WORKER_MODE in ("realistic", "realista"):
-        time.sleep(REALISTIC_DELAY_MS / 1000.0)
+        busy_wait_ms(REALISTIC_DELAY_MS)
 
     # --- CASO A: ASIENTO NO NUMERADO (UNNUMBERED) ---
     if req.seat_id is None:
